@@ -1,5 +1,8 @@
 # native/
 
+The optional [loopback lab](../docs/loopback-lab.md) runs the same core in
+a standalone desktop CLI or Android diagnostic APK, without radio hardware.
+
 The C++20 / Qt 6 port of the live path: the modem, the receiver, the ARQ
 and the station, as `data2g-host` (headless) and `data2g-gui`, plus
 `data2g-monitor`, `data2g-replay` and `data2g-audio-check`. `data2g/`

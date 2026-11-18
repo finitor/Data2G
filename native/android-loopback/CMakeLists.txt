@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.24)
+project(data2g_android_lab LANGUAGES CXX)
+add_subdirectory(../loopback loopback)
+add_library(data2g_lab SHARED jni.cpp)
+target_link_libraries(data2g_lab PRIVATE data2g_loopback)
+set_target_properties(data2g_lab PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

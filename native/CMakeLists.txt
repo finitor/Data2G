@@ -44,6 +44,7 @@ set_property(CACHE DATA2G_BUILD_QTAUDIO PROPERTY STRINGS ON OFF AUTO)
 set(DATA2G_AUDIO_BACKEND "qt" CACHE STRING "Sound card backend (qt/miniaudio)")
 set_property(CACHE DATA2G_AUDIO_BACKEND PROPERTY STRINGS qt miniaudio)
 option(DATA2G_BUILD_RIG "Build libhamlib rig control" ON)
+option(DATA2G_BUILD_ANDROID_IO "Build Android audio and serial backends" ON)
 set(DATA2G_BUILD_HOST "AUTO" CACHE STRING "Build the data2g-host app (ON/OFF/AUTO)")
 set_property(CACHE DATA2G_BUILD_HOST PROPERTY STRINGS ON OFF AUTO)
 set(DATA2G_BUILD_GUI "AUTO" CACHE STRING "Build the data2g-gui app (ON/OFF/AUTO)")
@@ -116,7 +117,7 @@ set_source_files_properties(core/polar/polar.cpp core/arq/predictor.cpp core/gfl
 # --- device backends -----------------------------------------------------------
 # data2g_audio: audio/card.hpp's backend. The apps start a QCoreApplication
 # either way (Qt Multimedia needs one), so Qt Core comes with it.
-if(ANDROID)
+if(ANDROID AND DATA2G_BUILD_ANDROID_IO)
   # AudioRecord/AudioTrack through JNI (core/audio/android/): the UNPROCESSED
   # source (no AGC) and USB device routing, neither of which Qt Multimedia
   # offers there. The Java half is staged into the app by android-app/.

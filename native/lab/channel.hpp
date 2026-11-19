@@ -14,6 +14,7 @@ struct Profile {
     std::string name;
     double delay_ms = 0, spread_hz = 0;
 };
+struct SampleRange { std::size_t begin, end; };  // half-open TX sample indices
 Profile profile(const std::string& name);  // reference fading presets and ITU severe profiles; nvis/hilat aliases accepted
 
 // Fixed SplitMix64/uniform/Box-Muller algorithm, version 1. Unlike
@@ -35,7 +36,10 @@ public:
     // A complete TX burst -> noiseless RX samples. Absolute sample time
     // indexes fading even across silent gaps; includes the delayed tail.
     // Active mean TX power is normalized to 1, before fading (never after).
-    std::vector<double> render(std::span<const double> x, std::size_t first) const;
+    // Erasures mask analytic TX samples after the original power is measured,
+    // before fading/delay. Surviving samples keep their original normalization.
+    std::vector<double> render(std::span<const double> x, std::size_t first,
+                               std::span<const SampleRange> erasures = {}) const;
     const std::vector<std::complex<double>>& tap(int path) const { return taps_.at(path); }
     double tap_rate() const { return rate_; }
 private:

@@ -81,7 +81,10 @@ std::complex<double> Channel::gain(int path, std::size_t sample) const {
     return g[i] + (g[i + 1] - g[i]) * (t - i);
 }
 
-std::vector<double> Channel::render(std::span<const double> x, std::size_t first) const {
+std::vector<double> Channel::render(std::span<const double> x, std::size_t first,
+                                    std::span<const SampleRange> erasures) const {
+    for (const auto& r : erasures)
+        if (r.begin > r.end || r.end > x.size()) throw std::invalid_argument("erasure outside TX samples");
     if (x.empty()) return {};
     auto z = dsp::hilbert(x);
     double mean = 0;
@@ -94,6 +97,8 @@ std::vector<double> Channel::render(std::span<const double> x, std::size_t first
     }
     if (!active || power == 0) return std::vector<double>(x.size() + delay_, 0);
     const double scale = std::sqrt(active / power);
+    for (const auto& r : erasures)
+        std::fill(z.begin() + static_cast<std::ptrdiff_t>(r.begin), z.begin() + static_cast<std::ptrdiff_t>(r.end), 0);
     std::vector<double> y(x.size() + delay_);
     for (std::size_t i = 0; i < y.size(); ++i) {
         std::complex<double> v = i < z.size() ? z[i] : 0;

@@ -3,12 +3,12 @@
 #include "metrics.hpp"
 #include "goodput.hpp"
 #include "retry_policy.hpp"
+#include "transport.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <deque>
 #include <filesystem>
 #include <span>
 #include <stdexcept>
@@ -38,25 +38,6 @@ public:
     double airtime(const std::string& m, int n, bool dup) override { return arq::burst_seconds(arq::mode_at(m), n, dup); }
 private:
     std::string mode_;
-};
-
-struct Lane {
-    std::deque<double> signal;
-    Random noise;
-    double sigma;
-    Lane(std::uint64_t seed, double s) : noise(seed), sigma(s) {}
-    std::vector<double> read() {
-        std::vector<double> x(BLOCK);
-        for (double& v : x) {
-            v = sigma ? sigma * noise.normal() : 0;
-            if (!signal.empty()) { v += signal.front(); signal.pop_front(); }
-        }
-        return x;
-    }
-    void send(std::span<const double> x) {
-        if (signal.size() < x.size()) signal.resize(x.size(), 0);
-        for (std::size_t i = 0; i < x.size(); ++i) signal[i] += x[i];
-    }
 };
 
 struct Steps {
@@ -89,6 +70,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         throw std::invalid_argument("SNR -30..60 dB; horizon 1..600 s; payload 1..65536 bytes; cap 0..2");
     if (o.alternate_retries && !o.fixed_mode.empty())
         throw std::invalid_argument("alternate retries require the adaptive policy");
+    LossPlan losses(o.suppressions);
     const auto start = Clock::now();
     const double cpu_start = cpu_seconds();
     const auto channel_start = Clock::now();
@@ -118,7 +100,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     auto caller_hooks = hooks;
     if (o.alternate_retries)
         caller_hooks.policy = [] { return std::make_shared<AlternatingRetryPolicy>(); };
-    arq::Engine a("LAB1", ca, caller_hooks), b("LAB2", cb, hooks);
+    LossEngine a("LAB1", ca, caller_hooks, 0, losses), b("LAB2", cb, hooks, 1, losses);
     std::array<int, 2> sent{}, heard{}, lost{};
     auto tx = [&](int endpoint, const arq::TxBurstPtr& burst) {
         ++sent[endpoint];
@@ -189,8 +171,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         const auto channel_render = Clock::now();
         if (ao.tx_abort) ab.signal.clear();
         if (bo.tx_abort) ba.signal.clear();
-        if (ao.tx_burst) ab.send(ch.render(*ao.tx_burst, a.n()));
-        if (bo.tx_burst) ba.send(ch.render(*bo.tx_burst, b.n()));
+        if (ao.tx_burst) ab.send(a.render_tx(ch, *ao.tx_burst, a.n()));
+        if (bo.tx_burst) ba.send(b.render_tx(ch, *bo.tx_burst, b.n()));
         channel_wall_s += std::chrono::duration<double>(Clock::now() - channel_render).count();
         const auto ra = a.session().read(), rb = b.session().read();
         got_a.insert(got_a.end(), ra.begin(), ra.end());
@@ -263,6 +245,10 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         + ",\"version\":" + arq::json_str(DATA2G_VERSION) + ",\"channel\":" + arq::json_str(o.channel)
         + ",\"fixed_mode\":" + arq::json_str(o.fixed_mode)
         + ",\"caller_retry_policy\":" + arq::json_str(o.alternate_retries ? "alternating_cpm" : "shipped")
+        + ",\"suppression_plan\":" + losses.plan_json()
+        + ",\"suppression_plan_applied\":" + flag(losses.applied())
+        + ",\"suppressed_bursts\":" + std::to_string(losses.suppressed())
+        + ",\"transmission_trace\":" + losses.trace_json()
         + ",\"compiler\":" + arq::json_str(
 #ifdef _MSC_VER
             "MSVC"

@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
             else if (flag == "--paced") o.paced = true;
             else if (flag == "--fixed-mode") o.fixed_mode = value();
             else if (flag == "--alternate-retries") o.alternate_retries = true;
+            else if (flag == "--suppress") o.suppressions.push_back(data2g::lab::parse_suppression(value()));
             else if (flag == "--cpm-burst") burst = true;
             else if (flag == "--list-campaign") campaign = value();
             else if (flag == "--trials") trials = std::stoi(value());
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
                           "  [--seed N] [--bytes N] [--horizon SECONDS] [--cfo HZ] [--cap 0|1|2]\n"
                           "  [--threads N (0=auto)] [--fixed-mode MODE] [--cpm-burst] [--paced] [--record-dir NEW_DIR] [--output FILE]\n"
                           "  [--alternate-retries]: study caller session retries with alternating existing CPM modes\n"
+                          "  [--suppress A|B:CONNECT|CONNECT_ACK|DISC|DISC_ACK:N] (repeatable; N=1..1000)\n"
                           "  --list-campaign cpm_floor|hf_sessions|hf_extreme [--trials N]: case plan as JSONL\n"
                           "Synchronous simulation, optionally paced to wall time. JSON to stdout; progress to stderr.\n"
                           "Exit 0=complete, 1=trial incomplete, 2=configuration/runtime error.");
@@ -61,6 +63,8 @@ int main(int argc, char** argv) {
         if (threads < 0 || threads > 32) throw std::invalid_argument("threads must be 0 (auto) or 1..32");
         if (o.alternate_retries && (burst || probe || !campaign.empty() || !o.fixed_mode.empty()))
             throw std::invalid_argument("alternate retries require an adaptive session workload");
+        if (!o.suppressions.empty() && (burst || probe || !campaign.empty()))
+            throw std::invalid_argument("suppression requires a session workload");
         data2g::pool::set_threads(threads);
         if (!campaign.empty()) {
             const auto count = data2g::lab::campaign_size(campaign, trials);

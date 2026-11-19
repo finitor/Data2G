@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
+
+#include "loss.hpp"
 
 namespace data2g::lab {
 
@@ -18,6 +21,7 @@ struct Options {
     int bandwidth_cap = 2;  // 0=500, 1=1700, 2=2400 Hz
     bool paced = false;  // wall-clock duty cycle; synchronous engines, not live audio
     bool alternate_retries = false;  // desktop study: caller session retries only
+    std::vector<Suppression> suppressions;  // desktop study: selected TX frames erased in the channel
 };
 // Returns a complete JSON record, including failed/cancelled trials. Progress
 // callbacks run on the caller's thread; all modem state stays on that thread.

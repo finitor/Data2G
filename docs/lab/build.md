@@ -54,7 +54,7 @@ python3 tools/check_layering.py
 git diff --check
 ```
 
-There are 27 CTests: the harness test plus 26 existing native suites. Mock radio bridge checks bind localhost sockets; a restrictive sandbox can deny that operation. No physical radio is used. Configure without `DATA2G_LAB_NATIVE_SUITES=ON` to build only the harness test.
+There are 28 CTests: two harness tests plus 26 existing native suites. Mock radio bridge checks bind localhost sockets; a restrictive sandbox can deny that operation. No physical radio is used. Configure without `DATA2G_LAB_NATIVE_SUITES=ON` to build only the harness tests.
 
 With NumPy/SciPy installed in a local Python environment:
 

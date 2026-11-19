@@ -18,7 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = {"natural": (), "connect": ("A:CONNECT:1", "A:CONNECT:2"),
              "connect_ack": ("B:CONNECT_ACK:1", "B:CONNECT_ACK:2"),
-             "disc": ("A:DISC:1", "A:DISC:2"), "disc_ack": ("B:DISC_ACK:1", "B:DISC_ACK:2")}
+             "disc": ("A:DISC:1", "A:DISC:2"), "disc_ack": ("B:DISC_ACK:1", "B:DISC_ACK:2"),
+             "connect_ack_after_loss": ("A:CONNECT:1", "B:CONNECT_ACK:1"),
+             "disc_ack_after_loss": ("A:DISC:1", "B:DISC_ACK:1")}
 
 
 def exposure(record, scenario, arm):
@@ -36,10 +38,13 @@ def exposure(record, scenario, arm):
     last_loss = max(forced, default=0)
     opportunity = next((t for t in changed if t["mode"] == expected and t["channel_first_sample"] >= last_loss), None)
     eligible = record["suppression_plan_applied"] and opportunity is not None
-    recovered = record["disconnected"] if scenario.startswith("disc") else record["connected"]
+    closure_confirmed = record["disconnected"] and "A DISCONNECTED CLIENT" in record["events"]
+    recovered = closure_confirmed if scenario.startswith("disc") else record["connected"]
     end = record["simulated_s"] if scenario.startswith("disc") else record["connect_s"]
     start = opportunity["channel_first_sample"] / record["sample_rate"] if opportunity else None
     return {"eligible": eligible, "plan_applied": record["suppression_plan_applied"],
+            "closure_confirmed": closure_confirmed,
+            "confirmed_complete": record["outcome"] == "complete" and closure_confirmed,
             "policy_opportunity": opportunity, "stage_recovered": eligible and recovered,
             "stage_recovery_s": end - start if eligible and recovered else None}
 
@@ -126,7 +131,7 @@ def main():
                         "prefix_matches": matching_prefix(records["shipped"], records["alternating_cpm"], args.scenario),
                         "both_eligible": all(r["eligible"] for r in pair_rows.values())}
                 pair["conditional_comparison_valid"] = pair["prefix_matches"] and pair["both_eligible"]
-                pair["arms"] = {arm: {k: row[k] for k in ("eligible", "stage_recovered", "stage_recovery_s", "outcome")}
+                pair["arms"] = {arm: {k: row[k] for k in ("eligible", "stage_recovered", "stage_recovery_s", "outcome", "confirmed_complete")}
                                 for arm, row in pair_rows.items()}
                 pairs.append(pair)
                 with (args.output / "pairs.jsonl").open("a") as index:
@@ -141,6 +146,7 @@ def main():
                                 "connected": sum(r["connected"] for r in group),
                                 "delivered": sum(r["delivered"] for r in group), "complete": len(complete),
                                 "eligible": sum(r["eligible"] for r in group),
+                                "confirmed_complete": sum(r["confirmed_complete"] for r in group),
                                 "stage_recovered_eligible": sum(r["stage_recovered"] for r in group),
                                 "median_end_s_complete_only": statistics.median(r["simulated_s"] for r in complete) if complete else None})
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

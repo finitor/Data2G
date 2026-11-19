@@ -1,5 +1,4 @@
 """Evidence-accounting tests; no modem execution or third-party dependencies."""
-import copy
 import unittest
 
 from study_retries import exposure, matching_prefix
@@ -11,7 +10,8 @@ def tx(endpoint, frame, occurrence, first, mode="fsk16r25-r1/2", suppressed=Fals
 
 
 def record():
-    return dict(suppression_plan_applied=True, sample_rate=8000, connected=True,
+    return dict(suppression_plan_applied=True, sample_rate=8000, connected=True, outcome="complete",
+                events=["A DISCONNECTED CLIENT"],
                 disconnected=True, connect_s=1, simulated_s=2,
                 transmission_trace=[tx("A", "CONNECT", 1, 0, suppressed=True),
                                     tx("A", "CONNECT", 2, 200, suppressed=True),
@@ -64,6 +64,16 @@ class EvidenceAccounting(unittest.TestCase):
         self.assertTrue(exposure(r, "disc", "alternating_cpm")["eligible"])
         self.assertEqual(exposure(r, "disc", "alternating_cpm")["stage_recovery_s"], 1.95)
         self.assertFalse(matching_prefix(r, record(), "disc"))
+
+    def test_both_closed_without_disc_ack_is_not_confirmed_recovery(self):
+        r = record()
+        for t in r["transmission_trace"]:
+            t["frame"] = "DISC"
+        r["events"] = ["B DISCONNECTED PEER", "A DISCONNECTED CLIENT unconfirmed"]
+        got = exposure(r, "disc", "alternating_cpm")
+        self.assertTrue(got["eligible"])
+        self.assertFalse(got["stage_recovered"])
+        self.assertFalse(got["confirmed_complete"])
 
 
 if __name__ == "__main__":

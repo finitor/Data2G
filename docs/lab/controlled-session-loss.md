@@ -70,6 +70,12 @@ case cannot be counted as conditional recovery evidence. A study must also
 verify the later, unsuppressed retry was actually emitted in the expected
 mode; applying the plan alone does not establish that.
 
+The existing `complete` outcome requires exact delivered bytes, final data
+ACKs and both peers closed. A caller can exhaust DISC retries and close
+unconfirmed, so `complete` alone does **not** prove receipt of DISC_ACK.
+Closure studies must additionally check the caller's exact
+`DISCONNECTED CLIENT` event, distinguishing `CLIENT unconfirmed`.
+
 ## Validation
 
 Build and run locally on macOS ARM64:

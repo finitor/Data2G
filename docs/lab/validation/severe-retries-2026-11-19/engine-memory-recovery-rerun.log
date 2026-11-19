@@ -1,0 +1,25 @@
+Start testing: Nov 19 03:24 CST
+----------------------------------------------------------
+10/27 Testing: engine
+10/27 Test: engine
+Command: "/Users/tvetter/work/Data2G/native/build-lab/native/tests/test_engine"
+Directory: /Users/tvetter/work/Data2G/native/build-lab/native/tests
+"engine" start time: Nov 19 03:24 CST
+Output:
+----------------------------------------------------------
+second header, 1.5 s decode in flight: 0.665 s late in sync mode, 0.036 s with the worker
+stalled decode, 2 s bound: 3.9 s dropped
+qpsk-r1/5, preview on: 374 ms for 12.0 s of audio
+qpsk-r1/5, preview off: 386 ms for 12.0 s of audio
+fsk8r50-r1/2, preview on: 516 ms for 17.0 s of audio
+fsk8r50-r1/2, preview off: 490 ms for 17.0 s of audio
+ok: test_engine (73 checks)
+<end of output>
+Test time =  25.31 sec
+----------------------------------------------------------
+Test Passed.
+"engine" end time: Nov 19 03:24 CST
+"engine" time elapsed: 00:00:25
+----------------------------------------------------------
+
+End testing: Nov 19 03:24 CST

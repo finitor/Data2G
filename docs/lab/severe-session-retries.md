@@ -147,16 +147,24 @@ The unchanged `engine` suite failed 1 of its 73 checks on both the initial
 run and an isolated rerun: `worker: on time` requires less than 150 ms of
 worker header lateness, while this host measured 195 ms and 255 ms. The
 relative worker-versus-synchronous check passed in both runs. No deadline
-assertion was relaxed or skipped. The cause of this timing failure has not
-been isolated; the full engine validation is **not passing**. The study's
-synchronous virtual-time outcomes do not resolve it or qualify live audio.
+assertion was relaxed or skipped. Those runs did not pass engine validation.
+The study's synchronous virtual-time outcomes do not resolve the timing
+failure or qualify live audio.
 
 A subsequent user-requested rerun of the unchanged engine test measured
 153 ms worker lateness against the same 150 ms limit (1,089 ms synchronous
 lateness). It again failed only this one of 73 checks. The improvement from
 195/255 ms is consistent with sensitivity to host conditions, but host load
-was not measured, so it does not establish the cause. No repeated reruns
-were used to select a passing result.
+was not measured, so it does not establish the cause.
+
+After the user reported that swap pressure had likely recovered, another
+requested run of the unchanged test **passed all 73 checks** in 25.31 s.
+Worker header lateness was 36 ms against the 150 ms limit; synchronous
+lateness was 665 ms. This clears the outstanding focused engine check for
+this build. The large change without source or threshold changes supports
+host-condition sensitivity, but no memory/scheduler telemetry was captured
+to attribute it specifically to swap. All requested attempts are retained,
+including failures. This is not full-suite or live-radio qualification.
 
 Commands and retained output:
 
@@ -172,6 +180,7 @@ git diff --check
 - [Focused suite output](validation/severe-retries-2026-11-19/correctness.log).
 - [Isolated engine rerun](validation/severe-retries-2026-11-19/engine-rerun.log).
 - [User-requested subsequent rerun](validation/severe-retries-2026-11-19/engine-user-rerun.log).
+- [Passing rerun after reported memory recovery](validation/severe-retries-2026-11-19/engine-memory-recovery-rerun.log).
 
 No Python/native parity, full-platform, Android, training, hosted CI or
 radio qualification is claimed for this Lab-only change.

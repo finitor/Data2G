@@ -15,6 +15,7 @@ JS = r'''
 (async function(){
 const assert=(condition,message)=>{if(!condition)throw Error(message);};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const until=async(predicate,message)=>{for(let i=0;i<30&&!predicate();++i)await wait(100);assert(predicate(),message);};
 try {
  const $=id=>document.getElementById(id),read=id=>JSON.parse($(id).textContent);
  const cases=read('cases-data'),segments=read('segments-data');
@@ -45,13 +46,15 @@ try {
   assert($('case-detail').textContent.includes('<'+'/script>'),'literal log text rendered');
   assert(!window.PWNED&&!document.querySelector('img[src=x]'),'case rendering stays text');
   const record=read('previews-data').slice(-1)[0];
+  $('case-rows').querySelector('button').click();
+  assert($('goodput-plots').querySelectorAll('svg').length===0,'reset detail before file loading');
   const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(record.result)],record.file,{type:'application/json'}));
-  $('case-file').files=transfer.files;$('case-file').dispatchEvent(new Event('change'));await wait(200);
+  $('case-file').files=transfer.files;$('case-file').dispatchEvent(new Event('change'));await until(()=>$('goodput-plots').querySelectorAll('svg').length===2,'local file finishes reading');
   assert($('goodput-plots').querySelectorAll('svg').length===2,'local JSON case loading');
   assert(!$('report-error').textContent,'file load succeeds');
-  const wrong={...record.result,revision:'different-payload'};read('manifest-data').source_revision;
+  const wrong={...record.result,revision:'different-payload'};
   const bad=new DataTransfer();bad.items.add(new File([JSON.stringify(wrong)],record.file,{type:'application/json'}));
-  $('case-file').files=bad.files;$('case-file').dispatchEvent(new Event('change'));await wait(200);
+  $('case-file').files=bad.files;$('case-file').dispatchEvent(new Event('change'));await until(()=>$('report-error').textContent.includes('different native payload'),'rejected file finishes reading');
   assert($('report-error').textContent.includes('different native payload'),'different payload rejected');
   $('report-error').textContent='';
  }
@@ -85,7 +88,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='data2g-html-chrome-', dir='/private/tmp') as profile:
             result = subprocess.run([str(args.chrome), '--headless=new', '--disable-gpu', '--no-first-run',
                                      '--disable-background-networking', '--disable-default-apps', '--no-default-browser-check',
-                                     f'--user-data-dir={profile}', ('--window-size=500,1800' if args.mobile else '--window-size=1440,1800'), '--virtual-time-budget=3500',
+                                     f'--user-data-dir={profile}', ('--window-size=500,1800' if args.mobile else '--window-size=1440,1800'), '--virtual-time-budget=8000',
                                      f'--screenshot={args.output / (name + ".png")}', '--dump-dom', source.resolve().as_uri()],
                                     capture_output=True, text=True, timeout=60)
         (args.output / f'{name}-dom.html').write_text(result.stdout)

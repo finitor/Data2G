@@ -49,6 +49,16 @@ class EvidenceAccounting(unittest.TestCase):
     def test_wrong_mode_is_not_exposure(self):
         self.assertFalse(exposure(record(), "connect", "shipped")["eligible"])
 
+    def test_retry_overlapping_an_erased_reply_is_exercised(self):
+        r = record()
+        r["transmission_trace"][1]["suppressed"] = False
+        ack = tx("B", "CONNECT_ACK", 1, 300, suppressed=True)
+        ack["samples"] = 200
+        r["transmission_trace"].insert(2, ack)
+        got = exposure(r, "connect_ack_after_loss", "alternating_cpm")
+        self.assertTrue(got["eligible"])
+        self.assertTrue(got["opportunity_overlaps_suppressed_tx"])
+
     def test_matching_history_excludes_changed_waveform(self):
         a, b = record(), record()
         b["transmission_trace"][-1]["mode"] = "fsk16r25-r1/2"

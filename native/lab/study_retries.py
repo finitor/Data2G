@@ -24,7 +24,7 @@ SCENARIOS = {"natural": (), "connect": ("A:CONNECT:1", "A:CONNECT:2"),
 
 
 def exposure(record, scenario, arm):
-    """Require the selected policy decision *after* all requested erasures.
+    """Require the policy decision after all requested erasures have begun.
 
     Lost ACKs can occur on later caller attempts after natural failures:
     reaching caller occurrence 3 alone does not establish this condition.
@@ -34,8 +34,8 @@ def exposure(record, scenario, arm):
     trace = record["transmission_trace"]
     changed = [t for t in trace if t["endpoint"] == "A" and t["frame"] == target
                and t["occurrence"] >= 3 and t["occurrence"] % 2 == 1 and not t["suppressed"]]
-    forced = [t["channel_first_sample"] + t["samples"] for t in trace if t["suppressed"]]
-    last_loss = max(forced, default=0)
+    forced = [t for t in trace if t["suppressed"]]
+    last_loss = max((t["channel_first_sample"] for t in forced), default=0)
     opportunity = next((t for t in changed if t["mode"] == expected and t["channel_first_sample"] >= last_loss), None)
     eligible = record["suppression_plan_applied"] and opportunity is not None
     closure_confirmed = record["disconnected"] and "A DISCONNECTED CLIENT" in record["events"]
@@ -43,6 +43,9 @@ def exposure(record, scenario, arm):
     end = record["simulated_s"] if scenario.startswith("disc") else record["connect_s"]
     start = opportunity["channel_first_sample"] / record["sample_rate"] if opportunity else None
     return {"eligible": eligible, "plan_applied": record["suppression_plan_applied"],
+            "opportunity_overlaps_suppressed_tx": opportunity is not None and any(
+                t["channel_first_sample"] <= opportunity["channel_first_sample"] < t["channel_first_sample"] + t["samples"]
+                for t in forced),
             "closure_confirmed": closure_confirmed,
             "confirmed_complete": record["outcome"] == "complete" and closure_confirmed,
             "policy_opportunity": opportunity, "stage_recovered": eligible and recovered,

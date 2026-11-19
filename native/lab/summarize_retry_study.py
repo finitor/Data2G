@@ -59,6 +59,8 @@ def main():
         group = [p for p in pairs if (p["scenario"], p["channel"], p["snr_db"]) == key]
         valid = [p for p in group if p["conditional_comparison_valid"]]
         cell = dict(zip(("scenario", "channel", "snr_db"), key), pairs=len(group), valid_conditional_pairs=len(valid))
+        cell["valid_pairs_with_retry_overlapping_erased_tx"] = sum(
+            any(r["opportunity_overlaps_suppressed_tx"] for r in p["arms"].values()) for p in valid)
         for arm in ("shipped", "alternating_cpm"):
             arm_rows = [p["arms"][arm] for p in group]
             cell[arm] = {"connected_all": sum(r["connected"] for r in arm_rows),

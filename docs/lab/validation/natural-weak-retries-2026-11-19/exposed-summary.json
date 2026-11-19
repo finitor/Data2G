@@ -1,0 +1,550 @@
+[
+  {
+    "channel": "awgn",
+    "snr_db": -16,
+    "filter": "exposed_prefix_matched",
+    "pairs": 32,
+    "classification": {
+      "exposed_prefix_matched": 32
+    },
+    "first_exposed_phase": {
+      "CONNECT": 32
+    },
+    "shipped": {
+      "connected": 20,
+      "delivered": 0,
+      "acknowledged": 0,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 0,
+      "capped_connection_wait_s": 94.4875,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "alternating_cpm": {
+      "connected": 7,
+      "delivered": 0,
+      "acknowledged": 0,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 0,
+      "capped_connection_wait_s": 149.9125,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 2,
+        "shipped_only": 15
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 5,
+      "median": -1.4000000000000057,
+      "min": -13.899999999999999,
+      "max": 11.200000000000003
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "awgn",
+    "snr_db": -16,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "CONNECT",
+    "pairs": 32,
+    "classification": {
+      "exposed_prefix_matched": 32
+    },
+    "first_exposed_phase": {
+      "CONNECT": 32
+    },
+    "shipped": {
+      "connected": 20,
+      "delivered": 0,
+      "acknowledged": 0,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 0,
+      "capped_connection_wait_s": 94.4875,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "alternating_cpm": {
+      "connected": 7,
+      "delivered": 0,
+      "acknowledged": 0,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 0,
+      "capped_connection_wait_s": 149.9125,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 2,
+        "shipped_only": 15
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 5,
+      "median": -1.4000000000000057,
+      "min": -13.899999999999999,
+      "max": 11.200000000000003
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "awgn",
+    "snr_db": -14,
+    "filter": "exposed_prefix_matched",
+    "pairs": 7,
+    "classification": {
+      "exposed_prefix_matched": 7
+    },
+    "first_exposed_phase": {
+      "DISC": 5,
+      "CONNECT": 2
+    },
+    "shipped": {
+      "connected": 7,
+      "delivered": 7,
+      "acknowledged": 7,
+      "complete": 5,
+      "confirmed_complete": 5,
+      "delivered_bytes": 896,
+      "capped_connection_wait_s": 22.714285714285715,
+      "capped_confirmed_completion_wait_s": 164.9
+    },
+    "alternating_cpm": {
+      "connected": 7,
+      "delivered": 7,
+      "acknowledged": 7,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 896,
+      "capped_connection_wait_s": 25.9,
+      "capped_confirmed_completion_wait_s": 172.75714285714287
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 4
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 7,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 11.799999999999997
+    },
+    "simulated_s_paired_delta": {
+      "n": 1,
+      "median": -45.89999999999998,
+      "min": -45.89999999999998,
+      "max": -45.89999999999998
+    }
+  },
+  {
+    "channel": "awgn",
+    "snr_db": -14,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "CONNECT",
+    "pairs": 2,
+    "classification": {
+      "exposed_prefix_matched": 2
+    },
+    "first_exposed_phase": {
+      "CONNECT": 2
+    },
+    "shipped": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 1,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 31.9,
+      "capped_confirmed_completion_wait_s": 177.6
+    },
+    "alternating_cpm": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 1,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 43.05,
+      "capped_confirmed_completion_wait_s": 154.65
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 2,
+      "median": 11.149999999999999,
+      "min": 10.5,
+      "max": 11.799999999999997
+    },
+    "simulated_s_paired_delta": {
+      "n": 1,
+      "median": -45.89999999999998,
+      "min": -45.89999999999998,
+      "max": -45.89999999999998
+    }
+  },
+  {
+    "channel": "awgn",
+    "snr_db": -14,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "DISC",
+    "pairs": 5,
+    "classification": {
+      "exposed_prefix_matched": 5
+    },
+    "first_exposed_phase": {
+      "DISC": 5
+    },
+    "shipped": {
+      "connected": 5,
+      "delivered": 5,
+      "acknowledged": 5,
+      "complete": 4,
+      "confirmed_complete": 4,
+      "delivered_bytes": 640,
+      "capped_connection_wait_s": 19.04,
+      "capped_confirmed_completion_wait_s": 159.82
+    },
+    "alternating_cpm": {
+      "connected": 5,
+      "delivered": 5,
+      "acknowledged": 5,
+      "complete": 1,
+      "confirmed_complete": 0,
+      "delivered_bytes": 640,
+      "capped_connection_wait_s": 19.04,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 4
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 5,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "mpp",
+    "snr_db": -12,
+    "filter": "exposed_prefix_matched",
+    "pairs": 18,
+    "classification": {
+      "exposed_prefix_matched": 18
+    },
+    "first_exposed_phase": {
+      "CONNECT": 17,
+      "DISC": 1
+    },
+    "shipped": {
+      "connected": 15,
+      "delivered": 4,
+      "acknowledged": 3,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 768,
+      "capped_connection_wait_s": 57.55555555555556,
+      "capped_confirmed_completion_wait_s": 178.7111111111111
+    },
+    "alternating_cpm": {
+      "connected": 11,
+      "delivered": 1,
+      "acknowledged": 1,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 192,
+      "capped_connection_wait_s": 93.53333333333333,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 4
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 1
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 11,
+      "median": 10.300000000000004,
+      "min": -2.700000000000003,
+      "max": 12.100000000000001
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "mpp",
+    "snr_db": -12,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "CONNECT",
+    "pairs": 17,
+    "classification": {
+      "exposed_prefix_matched": 17
+    },
+    "first_exposed_phase": {
+      "CONNECT": 17
+    },
+    "shipped": {
+      "connected": 14,
+      "delivered": 3,
+      "acknowledged": 2,
+      "complete": 1,
+      "confirmed_complete": 1,
+      "delivered_bytes": 640,
+      "capped_connection_wait_s": 59.811764705882354,
+      "capped_confirmed_completion_wait_s": 178.63529411764705
+    },
+    "alternating_cpm": {
+      "connected": 10,
+      "delivered": 0,
+      "acknowledged": 0,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 64,
+      "capped_connection_wait_s": 97.90588235294118,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 4
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 1
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 10,
+      "median": 10.5,
+      "min": -2.700000000000003,
+      "max": 12.100000000000001
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "mpp",
+    "snr_db": -12,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "DISC",
+    "pairs": 1,
+    "classification": {
+      "exposed_prefix_matched": 1
+    },
+    "first_exposed_phase": {
+      "DISC": 1
+    },
+    "shipped": {
+      "connected": 1,
+      "delivered": 1,
+      "acknowledged": 1,
+      "complete": 1,
+      "confirmed_complete": 0,
+      "delivered_bytes": 128,
+      "capped_connection_wait_s": 19.2,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "alternating_cpm": {
+      "connected": 1,
+      "delivered": 1,
+      "acknowledged": 1,
+      "complete": 0,
+      "confirmed_complete": 0,
+      "delivered_bytes": 128,
+      "capped_connection_wait_s": 19.2,
+      "capped_confirmed_completion_wait_s": 180.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 1,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "simulated_s_paired_delta": {
+      "n": 0,
+      "median": null,
+      "min": null,
+      "max": null
+    }
+  },
+  {
+    "channel": "mpp",
+    "snr_db": -8,
+    "filter": "exposed_prefix_matched",
+    "pairs": 2,
+    "classification": {
+      "exposed_prefix_matched": 2
+    },
+    "first_exposed_phase": {
+      "DISC": 2
+    },
+    "shipped": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 19.450000000000003,
+      "capped_confirmed_completion_wait_s": 137.4
+    },
+    "alternating_cpm": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 19.450000000000003,
+      "capped_confirmed_completion_wait_s": 136.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 2,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "simulated_s_paired_delta": {
+      "n": 1,
+      "median": -2.799999999999997,
+      "min": -2.799999999999997,
+      "max": -2.799999999999997
+    }
+  },
+  {
+    "channel": "mpp",
+    "snr_db": -8,
+    "filter": "exposed_prefix_matched",
+    "first_phase": "DISC",
+    "pairs": 2,
+    "classification": {
+      "exposed_prefix_matched": 2
+    },
+    "first_exposed_phase": {
+      "DISC": 2
+    },
+    "shipped": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 19.450000000000003,
+      "capped_confirmed_completion_wait_s": 137.4
+    },
+    "alternating_cpm": {
+      "connected": 2,
+      "delivered": 2,
+      "acknowledged": 2,
+      "complete": 2,
+      "confirmed_complete": 1,
+      "delivered_bytes": 256,
+      "capped_connection_wait_s": 19.450000000000003,
+      "capped_confirmed_completion_wait_s": 136.0
+    },
+    "discordant": {
+      "connected": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      },
+      "confirmed_complete": {
+        "candidate_only": 0,
+        "shipped_only": 0
+      }
+    },
+    "connect_s_paired_delta": {
+      "n": 2,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "simulated_s_paired_delta": {
+      "n": 1,
+      "median": -2.799999999999997,
+      "min": -2.799999999999997,
+      "max": -2.799999999999997
+    }
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+  "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+  "seeds_per_cell": 32,
+  "scenario": "natural",
+  "bytes_each_way": 64,
+  "horizon_s": 180,
+  "cfo_hz": 4.5,
+  "pool_threads": 1,
+  "cells": [
+    {
+      "channel": "awgn",
+      "snr_db": -16,
+      "first_seed": 2001
+    },
+    {
+      "channel": "awgn",
+      "snr_db": -14,
+      "first_seed": 2101
+    },
+    {
+      "channel": "mpp",
+      "snr_db": -12,
+      "first_seed": 2201
+    },
+    {
+      "channel": "mpp",
+      "snr_db": -8,
+      "first_seed": 2301
+    }
+  ]
+}

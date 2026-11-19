@@ -1,0 +1,306 @@
+{
+  "plan": {
+    "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+    "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+    "seeds_per_cell": 32,
+    "scenario": "natural",
+    "bytes_each_way": 64,
+    "horizon_s": 180,
+    "cfo_hz": 4.5,
+    "pool_threads": 1,
+    "cells": [
+      {
+        "channel": "awgn",
+        "snr_db": -16,
+        "first_seed": 2001
+      },
+      {
+        "channel": "awgn",
+        "snr_db": -14,
+        "first_seed": 2101
+      },
+      {
+        "channel": "mpp",
+        "snr_db": -12,
+        "first_seed": 2201
+      },
+      {
+        "channel": "mpp",
+        "snr_db": -8,
+        "first_seed": 2301
+      }
+    ]
+  },
+  "executions": {
+    "awgn_-16": {
+      "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+      "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+      "platform": "macOS-15.8.3-arm64-arm-64bit",
+      "settings": {
+        "binary": "/Users/tvetter/work/Data2G/native/build-lab/data2g-lab",
+        "output": "/Users/tvetter/work/Data2G/runs/natural-weak-retries-20261119/awgn_-16",
+        "channels": [
+          "awgn"
+        ],
+        "snrs": [
+          -16.0
+        ],
+        "first_seed": 2001,
+        "seeds": 32,
+        "horizon": 180,
+        "scenario": "natural"
+      },
+      "limits": [
+        "mean-power normalized, SNR in 2500 Hz; not PEP matched",
+        "synchronous engines, production DD wall-time budget; not live deadlines",
+        "64 random bytes each direction; short sessions, not sustained throughput",
+        "forced-loss scenarios measure conditional recovery, not natural-loss reliability",
+        "Gaussian fading and white noise; no impulsive atmospheric noise or RF hardware"
+      ],
+      "source_manifest_sha256": "1bba65b4c0be27142d5503a0bdc203d3b10d169ee71792479b86eee5901da872"
+    },
+    "awgn_-14": {
+      "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+      "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+      "platform": "macOS-15.8.3-arm64-arm-64bit",
+      "settings": {
+        "binary": "/Users/tvetter/work/Data2G/native/build-lab/data2g-lab",
+        "output": "/Users/tvetter/work/Data2G/runs/natural-weak-retries-20261119/awgn_-14",
+        "channels": [
+          "awgn"
+        ],
+        "snrs": [
+          -14.0
+        ],
+        "first_seed": 2101,
+        "seeds": 32,
+        "horizon": 180,
+        "scenario": "natural"
+      },
+      "limits": [
+        "mean-power normalized, SNR in 2500 Hz; not PEP matched",
+        "synchronous engines, production DD wall-time budget; not live deadlines",
+        "64 random bytes each direction; short sessions, not sustained throughput",
+        "forced-loss scenarios measure conditional recovery, not natural-loss reliability",
+        "Gaussian fading and white noise; no impulsive atmospheric noise or RF hardware"
+      ],
+      "source_manifest_sha256": "1bba65b4c0be27142d5503a0bdc203d3b10d169ee71792479b86eee5901da872"
+    },
+    "mpp_-12": {
+      "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+      "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+      "platform": "macOS-15.8.3-arm64-arm-64bit",
+      "settings": {
+        "binary": "/Users/tvetter/work/Data2G/native/build-lab/data2g-lab",
+        "output": "/Users/tvetter/work/Data2G/runs/natural-weak-retries-20261119/mpp_-12",
+        "channels": [
+          "mpp"
+        ],
+        "snrs": [
+          -12.0
+        ],
+        "first_seed": 2201,
+        "seeds": 32,
+        "horizon": 180,
+        "scenario": "natural"
+      },
+      "limits": [
+        "mean-power normalized, SNR in 2500 Hz; not PEP matched",
+        "synchronous engines, production DD wall-time budget; not live deadlines",
+        "64 random bytes each direction; short sessions, not sustained throughput",
+        "forced-loss scenarios measure conditional recovery, not natural-loss reliability",
+        "Gaussian fading and white noise; no impulsive atmospheric noise or RF hardware"
+      ],
+      "source_manifest_sha256": "1bba65b4c0be27142d5503a0bdc203d3b10d169ee71792479b86eee5901da872"
+    },
+    "mpp_-8": {
+      "head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+      "binary_sha256": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+      "platform": "macOS-15.8.3-arm64-arm-64bit",
+      "settings": {
+        "binary": "/Users/tvetter/work/Data2G/native/build-lab/data2g-lab",
+        "output": "/Users/tvetter/work/Data2G/runs/natural-weak-retries-20261119/mpp_-8",
+        "channels": [
+          "mpp"
+        ],
+        "snrs": [
+          -8.0
+        ],
+        "first_seed": 2301,
+        "seeds": 32,
+        "horizon": 180,
+        "scenario": "natural"
+      },
+      "limits": [
+        "mean-power normalized, SNR in 2500 Hz; not PEP matched",
+        "synchronous engines, production DD wall-time budget; not live deadlines",
+        "64 random bytes each direction; short sessions, not sustained throughput",
+        "forced-loss scenarios measure conditional recovery, not natural-loss reliability",
+        "Gaussian fading and white noise; no impulsive atmospheric noise or RF hardware"
+      ],
+      "source_manifest_sha256": "1bba65b4c0be27142d5503a0bdc203d3b10d169ee71792479b86eee5901da872"
+    }
+  },
+  "analysis_head": "adba6c77ab577524066bf0ea186bb37ada4f37c2",
+  "analysis_sha256": "82cbdbb1c250ddd524402a95f10031b182c54d62cc6e4af9e10561f9edbcfb4e",
+  "source_manifests": {
+    "1bba65b4c0be27142d5503a0bdc203d3b10d169ee71792479b86eee5901da872": {
+      "native/core/arq/burst.cpp": "cb8cddcd246a8156f73343cc871a558bd9b9ed5506d44179af358efef16627a0",
+      "native/core/arq/burst.hpp": "50bd3801ae4e74548f89dff2ff5f9c952166c454a5bed205eed9b9bb74a0a6eb",
+      "native/core/arq/engine.cpp": "e521de1c61d9b852ff6606012bc766a0de1a0f4a18d328b2b8cef48fc9e463c3",
+      "native/core/arq/engine.hpp": "46b56056a0e4ce671430615f0132eb6fb219f6b50476b426ff447b935191b99e",
+      "native/core/arq/frames.cpp": "595f2aca24d62cfa763d24bf6cbb1204049d1e6a76b9079ed0a5c63d3abf3f18",
+      "native/core/arq/frames.hpp": "9e0525086e452ff3f5b5537f32670ba2dc4848045b8a789f0005cbdb03f71614",
+      "native/core/arq/link.cpp": "edb42a5e05d43f4a5b4ca4b160ac9818fc8554e771f01e49807a9ac16f7e8d56",
+      "native/core/arq/link.hpp": "9bfc1a13d90cb204ce70109332cf39e34e0fea8467880ae4f210ac18f7555fb7",
+      "native/core/arq/measured.hpp": "aa9d61d2a3451ab59341cfd0fc0123feb14d621e631b4ba8962a8d8a6c8ccdd0",
+      "native/core/arq/modes.cpp": "8d0b1a41585b82e7af1b9f0ce1b1aaac1ca8a196a43e502364aa7f2683ecf61a",
+      "native/core/arq/modes.hpp": "069b1d77ec5396500949e67045b4bf22235aab4241706c743bb6a18cadb5805b",
+      "native/core/arq/nod.cpp": "5b45dc5a33f837933510f7247e20504b2eb3362b22d428c1c875009f737bca83",
+      "native/core/arq/nod.hpp": "ddb8f726b0dd3a6a8b8523e1b174b9a4914c387dff908b021095335d9f610fef",
+      "native/core/arq/phy.cpp": "9bd8e8cb9b1e009f7a4925270a286750ed0bad55df10fc78a315f0b7bcd598aa",
+      "native/core/arq/phy.hpp": "4fda44fbd901a2b10e72faa406d6a5d7fdd5c47fc62668911c19894fb075047e",
+      "native/core/arq/policy.cpp": "f994632b69abe88e03abdc24829f723d36628dd9b4111ad0ff6f48edc5b9c70e",
+      "native/core/arq/policy.hpp": "aced2fa1d41dd7da9900002979be0c9e001770af9232e2dc93d6b2c9a19e5345",
+      "native/core/arq/predictor.cpp": "7ae0ca0ce1bcc6c6103e94f41f0a5b17e29a7f9335107fc959b1aa688218f33b",
+      "native/core/arq/predictor.hpp": "675cd9ffd57959b2538bc630a77938761e91254ead0b2d7e98e54e32aae3257d",
+      "native/core/arq/session.cpp": "80b40c92f29bf680c0b2053fb9eceafb91f0471f2aa3320f338e96e560652349",
+      "native/core/arq/session.hpp": "20c80bfcf1fb52b34159b8509c8eeb6a073275d6b79a2c47f5c2ae03cdc58900",
+      "native/core/audio/android/androidaudio.cpp": "c982f0b35aa278b801834a8597d86ae2c7beec9617a80d3e14dca49976cd32df",
+      "native/core/audio/android/androidaudio.hpp": "dc61fd359547cb0f62f1f38b00eeb684d99e400260bc2900e95e7d5568f18857",
+      "native/core/audio/audio.cpp": "bc11fc4128a8fb14392b6719e84ae41f116cf2624a3b00881640333e5141bb79",
+      "native/core/audio/audio.hpp": "fb4f2a49f3f0ddd674ed20775b83b4e75dde9fe462b8ac1d5f87fab9397381d0",
+      "native/core/audio/card.hpp": "d55f039751dac623be0fd1719f863ce07d138b77ccb3e42e8f37aa59619447d9",
+      "native/core/audio/fifo.cpp": "811de19c67b2813e59fe183d62df980a34f33f042a818a571ed15d08b45ee4f2",
+      "native/core/audio/fifo.hpp": "f30ecf9872e8a92541a28bbfbcaade2d155bd5a78855125356a2d4c612409f21",
+      "native/core/audio/filters.cpp": "af24d8327b2185d61bd933a87c1f5973b501d310a241d14131e94590481beee1",
+      "native/core/audio/filters.hpp": "ff0675b01b3d6ecd7e844522d84d7021b5449b4489e49fdeb111f910f0adfd07",
+      "native/core/audio/miniaudio/maaudio.cpp": "c974b663649798cea56d16ffbe3e25919ffc039bffa0ab9d2690a7b26013335d",
+      "native/core/audio/miniaudio/maaudio.hpp": "a518b6869c5b1e8dab637df311f5aac4e39b21dca4ec119ba33b60aa11a65db9",
+      "native/core/audio/pipe.cpp": "46f62b6d949dcaa6d23170434a3b575c2bb161aa94d00aed7f5e33e61ab6eb17",
+      "native/core/audio/pipe.hpp": "bd824897136641859ca7ab0304e74a2aa059a6c72cde28302e9e4384538cd407",
+      "native/core/audio/qt/qtaudio.cpp": "2d36b59af3bce0ea6dbb9c4132993b3c2469a5be7f52540cb3afc4141970f4a5",
+      "native/core/audio/qt/qtaudio.hpp": "f56fba8a5e3ec207b20b609ed36c5812716350704a38b233c7fc3593c32256c4",
+      "native/core/audio/thread.cpp": "32078f2ef48e431a8067812f09879b5bbcc848f6462d53ec772de030ec794ac9",
+      "native/core/audio/thread.hpp": "13fcd0ce16ea0cc3c068c0e02baffc9d8f332cd2650846fb70cef14b9e28b786",
+      "native/core/codes/codes.cpp": "487e7c31813969c6202839e52cefb4d92f172be206aa24857b56b71bb4edda02",
+      "native/core/codes/codes.hpp": "b8397d70843725938ae38f91b19ae41dc228535e12083699789a960b8be8a77c",
+      "native/core/config/config.cpp": "8abcf53a4e856f5a7e4cb7ccc02e39de4122ecf1ea303cbdda75608e45b2a406",
+      "native/core/config/config.hpp": "38ad6d2b7ee65eacd8f21684d6a6b1e746df7a593e2a2be92b04f6672d36a8f7",
+      "native/core/constellation/constellation.cpp": "c4cc6ed34fa87f0c7804b343b85b67147b05c6beb3eb2eda423944d83ab498c2",
+      "native/core/constellation/constellation.hpp": "3667b1cc946d593626d97e3ab7873d5fcdd77f3319d0e5e769eed9f682acc81a",
+      "native/core/cpm/cpm.cpp": "93bff248540211ade8a36889e885a4d514e3e55ce55cc072398d662adae6e78b",
+      "native/core/cpm/cpm.hpp": "59edeff47631a0bfc1b4592f1d1161b403abc44da6748046de503879364260a7",
+      "native/core/cwid/cwid.cpp": "85ebf4fcae813fe0e1f8241c6f4c9fe4cb2b44b9d84bc3648739f7e97ad093b8",
+      "native/core/cwid/cwid.hpp": "35874dd3e36a63bb794946638222394720f9cd3ba6b21ffe3a58628cf28e2a9c",
+      "native/core/dsp/dsp.cpp": "4d70b24894c266e5aa67b9b095ce66c308d2d7a7d25e5598c673f145d5c3e5f5",
+      "native/core/dsp/dsp.hpp": "9a662b8b4a6f231b2d080fb85f21065b5fb55963a0b8b6fcee5b647d27c49515",
+      "native/core/dsp/fft.hpp": "0881e4f5cb2daf85e63a052926ff1f0f30fd16b24e413564d06d3b8f9c835466",
+      "native/core/equalizer/equalizer.cpp": "b7c106103454dd67712c136f4f9111c300ca762369758b37510001eb3601d052",
+      "native/core/equalizer/equalizer.hpp": "d647dca69995c7ea844dcdb69220707e4b9014ae6bc72ad919c7e4df13f3a002",
+      "native/core/generated/config.hpp": "7e24ebab02385ecf5ba24470847561014f7fa86def0e6f1415ef9168063e4632",
+      "native/core/generated/constellation.cpp": "1e46080bcaa299c1381e67e172b9dc1a2c945bed8865611cf7ef66c97990cc08",
+      "native/core/generated/cpm.cpp": "5959cd61f7ab69ff5b4a8f294b08c73b26e3a51c5426d085706b9e5d2620ab21",
+      "native/core/generated/format.cpp": "045982debebf0a96620e8b3cee6505a2628608fd187ac7df35eac0a477effee5",
+      "native/core/generated/gamma_q99.cpp": "0099b77a893133004812415f4619afe28631b2b164b46ae228f77144d0a9858a",
+      "native/core/generated/hand.cpp": "29b7609ccc67556615a11634e156dde34c0def40ce90e91022dab17c85b11643",
+      "native/core/generated/ldpc.cpp": "0d07920ce60caca98c08f667f94c4cac7b17f286fda8e67da8340b8a25cd6d4c",
+      "native/core/generated/modem.hpp": "7b5ac7664f0cc41a50b91f6e53cdeda1668c44e1d47232059ab9805700815a01",
+      "native/core/generated/polar_ga.cpp": "a77311f24248d79c325ee366ff7448a7820176c2d03874c5c14cfc80269c82a9",
+      "native/core/generated/predictor.cpp": "f657c27f178e3943dc30210ccf28ee78825a3a78ce0ed53116e42501a5217b55",
+      "native/core/generated/zdict.cpp": "e97718c2ccff99c0c70550c44419a77c432fa2a602730af17038ac30667a9ec4",
+      "native/core/gfldpc/gfldpc.cpp": "65e56d0f881404bf4a871cace69cd6f800aedad96777f0ec63dd4dc0f0a33d1d",
+      "native/core/gfldpc/gfldpc.hpp": "916136a96ec20b2a5ef147ced2596a4fc18248f5b0d125ff651cbaafcd6b4818",
+      "native/core/hand/hand.cpp": "dd455558320bb7cf862c27758e408d429147636d21dbf6ea4c2c360fd3fa442e",
+      "native/core/hand/hand.hpp": "e97e31f1707d96b09269e8e43fc260d7fe661a1ba954c410915b7619e8679440",
+      "native/core/host/host.cpp": "2f82ab474775854385036e60f1a90ea1175b0432e9811221c4f80b916fd6434a",
+      "native/core/host/host.hpp": "b618c25e30dd77422e117c1c750d82bc73e5504646c84d952fdbd3dfadd2d89d",
+      "native/core/kisslink/kisslink.cpp": "d6df7f73736a93ca6109d2e7eb616b67cce5dee1a12df84a762bc49500208217",
+      "native/core/kisslink/kisslink.hpp": "6587adbe61f575679c7c379714940910fa8470596c655ce4e79b5795e7a3bea8",
+      "native/core/ldpc/ldpc.cpp": "0c6b3eecee7eec874dbc978f30a5c77c8ae40ebaaf1ceff4fe75e7c8880797d6",
+      "native/core/ldpc/ldpc.hpp": "081ea9ae7192d139c7cd9869f6ce39861aecdc2d685964500d361f28bbae6f67",
+      "native/core/modem/modem.cpp": "fa885b5fc831316cce8ec7d206b0380ba02e1463d02f20d1826fca2a57915862",
+      "native/core/modem/modem.hpp": "da0c4f497cb4d402110810d7807650d027fabfe7ddfb08681f43bad73afa9e9f",
+      "native/core/modem/timing.cpp": "7faca92d13e7fea5a400eb359b09b197de8315d41950a6d3e797a39c00006b2e",
+      "native/core/modem/timing.hpp": "569755db5c9c955c589b4c2c2b3a092eedc8eedfe58dcd28774b1944896e146a",
+      "native/core/monitor/monitor.cpp": "e43b09eb8d0259c994b2d6df70ff83b2d5f1de5fc89f5cdaf2bfe3b1afdc2310",
+      "native/core/monitor/monitor.hpp": "e33adcd8b395a3954eb39cdb4ce319e11a5a14d83065d93a5349735681e1fafa",
+      "native/core/polar/polar.cpp": "81abf07526347f4155dd9e91197d2daf99ee59aae1730e1353ef7a1a7c911465",
+      "native/core/polar/polar.hpp": "57dbdab48056736ca4fae9a1ca10aed0b99fb29ce9f74c976067e8d31b130381",
+      "native/core/receiver/noise_profile.cpp": "6423e82ff22bcf6fc4e76d928510f141b38636abb43924a5036f02565c89cbd6",
+      "native/core/receiver/noise_profile.hpp": "e96026c02237eec6c8b15a23f9cef62d7e0ce7d4dd4cb15193fe9b2036caf860",
+      "native/core/receiver/receiver.cpp": "7a093e25d384878572c1d478e891551eb5bdf4953cab8115a0a017c4a94d0d77",
+      "native/core/receiver/receiver.hpp": "26aaaa4f9a6779bf6b106d352ef01447cedabdacd693483705ea4d781708b725",
+      "native/core/rig/android/androidrig.cpp": "15c23396bd01a14f9a8b3e3d5d89c251efbb255b4c681aeb9ee897544c89337f",
+      "native/core/rig/android/androidrig.hpp": "a815c2b649ad6fcd52abf3a23496299dd68b3a0d147856f57bc1aafef09b6e97",
+      "native/core/rig/backend.hpp": "e6044eb0747bc080846c8e72f2b52c8ca5d11f06ce7a115448995738bd07d6fc",
+      "native/core/rig/bridge.cpp": "8df876d9083cfa9d5e5a3a825620fc9973e619ac433cdff470f78b28f031380e",
+      "native/core/rig/bridge.hpp": "523a0055014c868a08e98b7c0d0f55cd73c2e569b7a64235c6425b607d995a9b",
+      "native/core/rig/bridged.cpp": "81d38b77a0d2cd4f8c776126bddbefc5b3c501a008ae8d693f952bf0550d08cc",
+      "native/core/rig/bridged.hpp": "e0c5bf48513259dd7317e3f6f547716754e65e3ea75cf2ef551bc9547dabcf52",
+      "native/core/rig/cm108.cpp": "e7d6429fec8976a4b19a8e1e428625d40e681105cc3b60502c0d5beee2693548",
+      "native/core/rig/cm108.hpp": "b9e18c55d7d6db1454c790644d8980fd4003fa40ad7141e140d4b430ffe25f73",
+      "native/core/rig/config.hpp": "e9ad1fdf61faf99d18f3fc78787997cad5693e82044feb765e42a5aa87e8033b",
+      "native/core/rig/controller.cpp": "fcf90b4bb8a5c1d4351e441bba44dce0c14e247cfe38be03aff296af1b468884",
+      "native/core/rig/controller.hpp": "8168a8c91042ac4799048ff1c7e5c0670fb3d5653a105be8f6edb83ab0a6c739",
+      "native/core/rig/hamlib/hamlib.cpp": "486af00ecc561e59568e97252d49425cc758398f96c653a6ae06dcbb17ff88a9",
+      "native/core/rig/hamlib/hamlib.hpp": "a1af927abc84b3e4f848e7b0b1bf8ac8388df1a00a43daea09081424a9a8411e",
+      "native/core/rig/keyer.cpp": "af1458169b6105d353a362847844646452e7957647a7938bc1dd60d29e37a47a",
+      "native/core/rig/keyer.hpp": "6088dc96dc425a4da1d3f5fadd578997940685d319007863bbe7373eab5a098c",
+      "native/core/rig/trace.cpp": "f53d9110acf5b831c8d9ce53599b72de5cd2e213b76c271912c1220e2e16be55",
+      "native/core/rig/trace.hpp": "db8f7e1998fca178f56fd69ce9840f0a27d235c50b3559046ad98830b3303944",
+      "native/core/rig/transport.hpp": "e7aeaed9f81131dab7a055b7fc2101df31eb81534820e4eea9178b322bc5c5d6",
+      "native/core/tables/constellation.hpp": "08b872d605a236ac5b6af7c3831378bbf464fa4202efbd96770ec09b779a214e",
+      "native/core/tables/cpm.hpp": "d318f3fa42f3311dcf846140693ef1dddaa0909b29a9d1549d561f237d23ef44",
+      "native/core/tables/format.hpp": "785c84ce3d6c1ab38a3cb06bfcb15099184ea7ddcf1fb9b7343443e314bcefef",
+      "native/core/tables/gamma_q99.hpp": "69c09cbdd5a28c8a63f166df730de4423d0a2dbffe6c9aefe940611b8ec6be89",
+      "native/core/tables/hand.hpp": "27cf6bbe947eddf50f9a87c009bf8a4095764c6202792726425336abbe3be011",
+      "native/core/tables/ldpc.hpp": "d107b7d8dc814cab9a9f605f7a39531715d29f2864aa65c0401e4cc3a2e2964b",
+      "native/core/tables/polar_ga.hpp": "ce15df5662c2b1888f560b3c093428716399f8d77b164d54ab0ccbe6c0cca3ca",
+      "native/core/tables/predictor.hpp": "d613feb6b1024ddf93ba4b28e4d1f9159d792c681488b785009ed6d9440e1cc8",
+      "native/core/tables/tables.hpp": "700999bc4ee294eb0868903a96dcf3b5bd0f6caa31df21a9627fdd578291bc1e",
+      "native/core/tables/zdict.hpp": "2e796d9ba9f1fec88faa19746d1954927e0b085a8ec8c1c3b66f4bf137a626d1",
+      "native/core/tnc/tnc.cpp": "8c9684575b2c78baeb9f571416f72ffe9199683a6ed287da173ff378e77d279a",
+      "native/core/tnc/tnc.hpp": "5f73259433084b30e3c115cc27a9bf73bc3924140515e2d198f0b60258e6b7b7",
+      "native/core/util/cancel.cpp": "4738d5c08876ee813bfaaf8f699094c8a613386370a1cbdead58e7a410c21562",
+      "native/core/util/cancel.hpp": "0124bc8e23b2c9b7606f58df50bb00744960bba79c0de49f724e797378e5031e",
+      "native/core/util/linalg.cpp": "6e917bc9384f457ee1e57761676471e1a18a529588a98b0f85f595ffc4bc3eaf",
+      "native/core/util/linalg.hpp": "351b930aa764da3cbd0c22d9458b8245a8116b5919dee3ff00227340e6327b79",
+      "native/core/util/mat.hpp": "e279a7a91a750fdd33cddabe4a73b443e3f65197ca5bb74a3926fa61f3824e44",
+      "native/core/util/pool.cpp": "2a6e92d7ef6de6ea66ace3cd4f6f63cc0ea0d85bc7f114aa1c34c37744f2fa86",
+      "native/core/util/pool.hpp": "a59913795880319bcd64bc54ce0f1935470c2190a66ed76b0d5a2ddc5a5a52eb",
+      "native/core/util/simd.hpp": "8efde1e1e7dceeba86bd2c5e2c2102b88a5ca1ad5dede6d0536bcce3d4cae139",
+      "native/core/waveform/dsp.cpp": "33e1a80d325ca2efe52dff1ac340631a1288c985590fd84e4afceca758fa560b",
+      "native/core/waveform/dsp.hpp": "10ab7ab85ff4dcdf51394dd3caacc34f2870681d356c4d6c87d1881ca84d0088",
+      "native/core/waveform/ofdm.cpp": "b380f1a79da372d2a4394b9306295b09a5594671745eb0b17ee82699995a7cb5",
+      "native/core/waveform/ofdm.hpp": "b4698bc896e0a883f33aceb7a2ece9f587c6ba0eb9e099345f31a6e2146a58f8",
+      "native/core/waveform/sync.cpp": "6fe82ecaaaa6a8b31febf2620c401a2ea6ced76ff773b6fb0af5b3d927909e85",
+      "native/core/waveform/sync.hpp": "1feeefb40fea3e94e5c34e0038405c75af1ad3e33e81c3a44bc9eae0fc591a08",
+      "native/lab/CMakeLists.txt": "3966e4cc9f11ef5eddaafe75d19c6c135a9839bed7349b0e35901151e6ea2eee",
+      "native/lab/campaign.cpp": "6d44ef780c870bb3141cd842d962bd7cbaa9c399eb02bf325c609865e3a39d43",
+      "native/lab/campaign.hpp": "b5e08d8513c68f3f5be04125aa175c35a1cbe0eddf0b22bae64ec193cc0d7dca",
+      "native/lab/channel.cpp": "ce4a06773cbd23c9aefefcc518fa941170986838dbd198ac7bd166e307dc8ffb",
+      "native/lab/channel.hpp": "52e6bd8f74f7e7eaa2f76d1292098333f0ab77388c5ccdda2369588526600841",
+      "native/lab/check_campaign.py": "ca362d87fd90f5fae288952a8f5dae132a7ef1665014e6cabd932f360e2e8b11",
+      "native/lab/check_channel.py": "ee76df5bd18ae5b164c4c8a3a4a6dc54eefd0aee3760fde95ee43622cee9a887",
+      "native/lab/goodput.hpp": "07594dcb90ce406ef325a89157d0a8088a34411d50ecf4e381217ae8e10dd163",
+      "native/lab/loss.cpp": "5ea9c8ae8827881a6aca12a1c1561fece4c9122bd4c5de5cd1a473d460466f70",
+      "native/lab/loss.hpp": "5abb899f2a666f67cded1d09b57b94929eb0e28166d03db90e7ffe678ad6f1f2",
+      "native/lab/main.cpp": "c26e01a283ef0327250015567385fd4be8908265bacc698945f5132659308f4a",
+      "native/lab/metrics.cpp": "edfba3d7fc691259508f77b1f604a65b4bbcb6b33f16c689df5149e1cd24a56f",
+      "native/lab/metrics.hpp": "000a0cf8efcda31138d03ccb8f951756aaf8d7e1b0db95c46927ff8def47410c",
+      "native/lab/natural_retry_study.py": "82cbdbb1c250ddd524402a95f10031b182c54d62cc6e4af9e10561f9edbcfb4e",
+      "native/lab/repro_disc_reply_overlap.py": "2a435e8542dea54be4c6993f193a8cc06a4741e5ad449ecbb0b8acac40544d69",
+      "native/lab/retry_policy.hpp": "76573aeae8b5681c640bc5ab0ad6c310c86add17ff6e9ef0a75a82f2af21bd21",
+      "native/lab/runner.cpp": "8701a4e896eb33eae308e1c4c930d9078241b3d9f722e78886d63d0915553f79",
+      "native/lab/runner.hpp": "c3c20f81ca647bf26c0113c709e8d9fbc5cde42fa5b4e7c40091d04af6cfe788",
+      "native/lab/study_retries.py": "faba8931dc221590a7e523ed0531c4562e71327b9a4921ef018de7c49abf5cfc",
+      "native/lab/summarize_retry_study.py": "a01a7461386be6ea37305daa25058a99f0ce9fd8e55bdca644c0b6bd463dfccd",
+      "native/lab/test_lab.cpp": "527b9c4ddc72cf5b05b513a12a2888be1536b3bb98495e739052c527df444b6e",
+      "native/lab/test_lab_loss.cpp": "c68c17dd3fc84ae73bddab1deca3bf2244f769c5ffda238cdb0682cbf48bf335",
+      "native/lab/test_natural_retry_study.py": "d72523915081338ae0206e7fe01027e715ac1500112173f98040927843e3eed1",
+      "native/lab/test_retry_study.py": "da5d8739bb1ac79fceb16dae327bbadf7fef1c31567ac6661186a23ba2de329c",
+      "native/lab/transport.hpp": "01b9f30405898b8eca47e57944c0425478a2be7827efca1489eeb2c83cbed5f1"
+    }
+  }
+}

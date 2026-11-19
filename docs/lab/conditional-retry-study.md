@@ -115,6 +115,8 @@ Forced erasures establish recovery conditional on specified earlier losses. They
 
 The broad retry-policy production change is **not justified by these results**: it regresses weak-MPP connection recovery and does not establish an overall complete-session improvement. The production policy remains unchanged. The DISC reply-timing finding is retained as an independent next increment with a direct reproduction, rather than bundled into this policy.
 
+The subsequent [natural-loss weak-channel validation](natural-weak-retry-study.md) completed 128 fresh paired cases. It observed connection and payload-delivery costs at MPP −12 dB and confirmed-closure costs at AWGN −14 dB, supporting retention of the shipped default. Those results complement the conditional measurements here; the extreme-Doppler gains remain specific to their tested regime.
+
 ## Evidence and validation
 
 - [All-attempt final case index](validation/conditional-retries-2026-11-19/cases.jsonl).

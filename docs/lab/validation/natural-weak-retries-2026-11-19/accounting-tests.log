@@ -1,0 +1,19 @@
+test_differences_before_change_are_not_attributed (test_natural_retry_study.NaturalAccounting) ... ok
+test_disc_only_policy_exposure_is_counted (test_natural_retry_study.NaturalAccounting) ... ok
+test_earlier_connect_is_first_even_if_disc_also_changes (test_natural_retry_study.NaturalAccounting) ... ok
+test_unconfirmed_close_and_failures_do_not_become_successes (test_natural_retry_study.NaturalAccounting) ... ok
+test_unexposed_pairs_stay_in_denominator (test_natural_retry_study.NaturalAccounting) ... ok
+test_wrong_input_policy_or_forced_loss_is_rejected (test_natural_retry_study.NaturalAccounting) ... ok
+test_ack_loss_after_third_attempt_requires_later_opportunity (test_retry_study.EvidenceAccounting) ... ok
+test_both_closed_without_disc_ack_is_not_confirmed_recovery (test_retry_study.EvidenceAccounting) ... ok
+test_disc_has_separate_target_and_end (test_retry_study.EvidenceAccounting) ... ok
+test_exercised_candidate (test_retry_study.EvidenceAccounting) ... ok
+test_matching_history_excludes_changed_waveform (test_retry_study.EvidenceAccounting) ... ok
+test_retry_overlapping_an_erased_reply_is_exercised (test_retry_study.EvidenceAccounting) ... ok
+test_unapplied_or_unreached_is_not_evidence (test_retry_study.EvidenceAccounting) ... ok
+test_wrong_mode_is_not_exposure (test_retry_study.EvidenceAccounting) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.001s
+
+OK

@@ -4,6 +4,14 @@ For prerequisites, installation, local validation and updating compiled weights,
 
 Data2G Lab is an optional testing and profiling tool for the existing Data2G C++ core, with a desktop CLI and an Android frontend. It supports paired-engine loopback sessions, one-way receiver measurements, fixed-recording replay, original native correctness suites and HF channel campaigns. The paired-engine workload passes actual simulated audio and verifies application bytes. No radio, audio device, Python runtime or Qt is needed on the phone. Mock-radio native suites use localhost sockets. The separate APK application ID is `org.cleverdomain.data2g.lab`.
 
+## Documentation
+
+- [Workloads and test suites](suites.md): every workload, all 26 native suites, channel grids and excluded coverage.
+- [Run controls](controls.md): every setup field and button, defaults, limits and common configurations.
+- [Build and installation](build.md): local desktop/Android builds, tests and updating weights.
+- [HTML reports](html-export.md): offline exported reports and exporter validation.
+- [Validation records](validation/): source identities, completed checks and raw evidence.
+
 ## Existing infrastructure and reuse
 
 | Existing component | Role retained |
@@ -82,32 +90,7 @@ The script only installs with explicit `--install DEVICE_SERIAL`. The APK uses t
 
 Open **Data2G Android Lab** and choose a workload. Pool size defaults to **Use modem default**, displaying the core's actual default (4 on the 8-core Redmi). Uncheck it to override with 1–32. Both requested and effective sizes are recorded; original native suites may deliberately change their own pool size. FFT threading is separate.
 
-| Workload | Coverage / measurement |
-|---|---|
-| Selected / quick loopback | One session or clean + AWGN + MPP, adaptive or selected fixed CPM policy |
-| Full HF sessions | Adaptive + all 6 fixed CPM modes × 10 channels × 8 SNRs (−16 through +12 dB) = 560 points per seed |
-| Extreme HF sessions | All four upstream severe ITU profiles; 224 points per seed |
-| Full CPM receiver campaign | All 6 modes × 7 channels, exact public `cpm_floor_study.py:e2e_grid` SNRs: 558 points; 100 seeds = 55,800 cases |
-| All / selected native suites | Original 26 hardware-free C++ suites, including ARQ link stress and worker/backlog engine checks |
-| Listening benchmark | Existing `data2g-bench-rx --listen`; one receiver, unpaced |
-| Recording replay | Existing `data2g-replay --worker`, listening as LAB1; import `audio_in.f16` (8 kHz mono little-endian float16) |
-| Burst benchmark | Existing `data2g-bench-rx` on an imported `.d2gb`; stage times and any tool-reported supplied-information fallback |
-
-Some native suites, especially `engine` and `arq_link`, exercise paired endpoints. Other suites test individual coding/receiver stages. The native collection is a mixture of workloads, not a uniform single-modem profile.
-
-The native suite catalog is generated from the build's actual targets:
-
-| Area | Packaged suites (`test_` prefix) |
-|---|---|
-| Protocol / engine | `arq`, `arq_link`, `arq_phy`, `engine`, `host` |
-| Modem / waveform | `modem`, `receiver`, `cpm`, `waveform`, `constellation`, `equalizer` |
-| Coding | `codes`, `gfldpc`, `ldpc`, `polar` |
-| Audio | `audio`, `cwid` |
-| Receiver helpers | `hand`, `primed`, `monitor` |
-| Utilities / interfaces | `pool`, `tnc` |
-| Radio-interface mocks | `rig`, `rig_bridge`, `rig_bridged`, `rig_cm108` |
-
-Excluded desktop/backend suites: `args`, `realtime`, `rig_hamlib`, `rx_plot`, `station_tx`, `tci`, `gui`. Native suite outcomes preserve original assertions, exit statuses, output and watchdog behavior rather than replacing tests with approximate simulations.
+The complete catalog is in [Workloads and test suites](suites.md). The [Run controls](controls.md) reference lists every setup field and action.
 
 Campaigns expose 1–1000 seeds per point, first seed, starting case index and an optional case limit. Preview the count before starting a long run. Session horizon, payload and pacing remain configurable; HF grids use a 4.5 Hz CFO. CPM diagnostics and the original test/tools run at their own speed; a paced session is still synchronous simulation, not live audio qualification. The native CPM campaign ports the normal receiver and paired supplied timing/CFO/header arm on identical audio. Other Python research arms and pytest suites are not embedded. A failed reception is a measurement, not a unit-test failure. Seven Qt/station/Hamlib-dependent suites are listed as unavailable in the app's coverage dialog, rather than silently skipped.
 

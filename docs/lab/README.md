@@ -13,6 +13,7 @@ Data2G Lab is an optional testing and profiling tool for the existing Data2G C++
 - [Validation records](validation/): source identities, completed checks and raw evidence.
 - [Severe-channel retry study](severe-session-retries.md): opt-in comparison of existing session retry modes.
 - [Controlled session losses](controlled-session-loss.md): deterministic loss targets, signal semantics and accounting.
+- [Conditional retry study](conditional-retry-study.md): actual retry exposure and recovery tradeoffs after forced losses.
 
 ## Existing infrastructure and reuse
 

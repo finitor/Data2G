@@ -1,0 +1,464 @@
+[
+  {
+    "scenario": "connect",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "alternating_cpm": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.6999999999999975,
+    "median_end_delta_both_confirmed_complete_s": 9.899999999999991
+  },
+  {
+    "scenario": "connect",
+    "channel": "awgn",
+    "snr_db": -10.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "alternating_cpm": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.6000000000000014,
+    "median_end_delta_both_confirmed_complete_s": -8.350000000000001
+  },
+  {
+    "scenario": "connect",
+    "channel": "hilat-d",
+    "snr_db": 0.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect",
+    "channel": "hilat-d",
+    "snr_db": 12.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect",
+    "channel": "mpp",
+    "snr_db": -12.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 4,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 4
+    },
+    "alternating_cpm": {
+      "connected_all": 3,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 3
+    },
+    "median_stage_delta_candidate_minus_shipped_s": 20.300000000000004,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 4,
+    "valid_conditional_pairs": 4,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "alternating_cpm": {
+      "connected_all": 4,
+      "complete_all": 4,
+      "confirmed_complete_all": 4,
+      "stage_recovered_valid": 4
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.799999999999997,
+    "median_end_delta_both_confirmed_complete_s": 17.200000000000003
+  },
+  {
+    "scenario": "connect_ack",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect_ack",
+    "channel": "hilat-d",
+    "snr_db": 0.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect_ack",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect_ack_after_loss",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.6500000000000004,
+    "median_end_delta_both_confirmed_complete_s": 10.549999999999997
+  },
+  {
+    "scenario": "connect_ack_after_loss",
+    "channel": "hilat-d",
+    "snr_db": 0.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 1,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 1
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "connect_ack_after_loss",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.799999999999997,
+    "median_end_delta_both_confirmed_complete_s": -5.649999999999999
+  },
+  {
+    "scenario": "disc",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.6999999999999957,
+    "median_end_delta_both_confirmed_complete_s": -2.6999999999999957
+  },
+  {
+    "scenario": "disc",
+    "channel": "hilat-d",
+    "snr_db": 12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 2,
+      "stage_recovered_valid": 2
+    },
+    "median_stage_delta_candidate_minus_shipped_s": -2.749999999999993,
+    "median_end_delta_both_confirmed_complete_s": -2.749999999999993
+  },
+  {
+    "scenario": "disc_ack",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc_ack",
+    "channel": "hilat-d",
+    "snr_db": 12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc_ack",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc_ack_after_loss",
+    "channel": "awgn",
+    "snr_db": -12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 2,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc_ack_after_loss",
+    "channel": "hilat-d",
+    "snr_db": 12.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 0,
+    "valid_pairs_with_retry_overlapping_erased_tx": 0,
+    "shipped": {
+      "connected_all": 0,
+      "complete_all": 0,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  },
+  {
+    "scenario": "disc_ack_after_loss",
+    "channel": "mpp",
+    "snr_db": -8.0,
+    "pairs": 2,
+    "valid_conditional_pairs": 2,
+    "valid_pairs_with_retry_overlapping_erased_tx": 2,
+    "shipped": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "alternating_cpm": {
+      "connected_all": 2,
+      "complete_all": 2,
+      "confirmed_complete_all": 0,
+      "stage_recovered_valid": 0
+    },
+    "median_stage_delta_candidate_minus_shipped_s": null,
+    "median_end_delta_both_confirmed_complete_s": null
+  }
+]

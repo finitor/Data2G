@@ -90,6 +90,12 @@ zero failures**. Its 171.46-second timeline contains 650 samples, including
 valid; lab memory uses both PSS and the explicitly labelled RSS fallback.
 Raw evidence: [final native campaign](redmi-10c-lab3-native-final-2026-11-18.json).
 
-Manual case-browser, memory-chart and ZIP/document-picker checks remain pending. No complete 55,800-case campaign or sustained thermal/deadline
+The user confirmed all three manual checks on the installed final APK:
+the single memory graph shows Lab and Available percentages, the case
+browser opens an individual case, and a campaign ZIP exported to Downloads
+can be reopened through the app's document picker. These checks complete
+the prototype's end-to-end validation.
+
+No complete 55,800-case campaign or sustained thermal/deadline
 qualification is claimed. These results exercise the current weights and
 must not be presented as qualification of future retrained weights.

@@ -2,6 +2,7 @@
 #include "channel.hpp"
 #include "campaign.hpp"
 #include "goodput.hpp"
+#include "retry_policy.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +24,18 @@ int main() {
     using namespace data2g::lab;
     try {
         data2g::pool::set_threads(1);
+        AlternatingRetryPolicy retries;
+        for (int cap = 0; cap < 3; ++cap) {
+            for (int tries = 0; tries < 6; ++tries) {
+                const auto mode = retries.connect_mode(cap, tries);
+                require(data2g::arq::width_hz(data2g::arq::mode_at(mode)) <= data2g::arq::cap_hz(cap),
+                        "retry study stays within every cap");
+                if (tries == 0 || tries % 2)
+                    require(mode == data2g::arq::connect_mode(cap, tries), "initial and odd retries retain shipped policy");
+                else
+                    require(mode == data2g::arq::ROBUST_FAST, "even retries use existing fast-fading mode");
+            }
+        }
         Goodput meter;
         meter.add(10, {100, 50, 0, 0});
         require(std::abs(meter.bps()[0] - 80) < 1e-9 && meter.bps()[2] == 0, "goodput counts unique delivered bytes separately from ACKs");
@@ -55,6 +68,14 @@ int main() {
         Options o;
         std::atomic_bool cancelled{true};
         require(run(o, cancelled).find("\"outcome\":\"cancelled\"") != std::string::npos, "cancelled never reported complete");
+        o.alternate_retries = true;
+        require(run(o, cancelled).find("\"caller_retry_policy\":\"alternating_cpm\"") != std::string::npos,
+                "retry study is identified in result");
+        o.fixed_mode = "fsk8r50-r1/3";
+        rejected = false;
+        try { run(o, cancelled); } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "retry study cannot silently override fixed policy");
+        o.fixed_mode.clear();
         const std::atomic_bool go{false};
         std::string clean_result;
         for (const char* name : {"clean", "awgn"}) {
@@ -72,6 +93,7 @@ int main() {
             return std::stod(clean_result.substr(pos + label.size()));
         };
         const double delivery = field("delivery_s"), ack = field("ack_s");
+        o.alternate_retries = false;
         require(delivery >= 0 && ack > delivery, "final ACK follows application delivery");
         o.channel = "clean";
         o.horizon_s = (delivery + ack) * .5;

@@ -2,6 +2,7 @@
 #include "channel.hpp"
 #include "metrics.hpp"
 #include "goodput.hpp"
+#include "retry_policy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -86,6 +87,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         || !std::isfinite(o.horizon_s) || o.bytes_each_way < 1 || o.bytes_each_way > 65536
         || o.bandwidth_cap < 0 || o.bandwidth_cap > 2)
         throw std::invalid_argument("SNR -30..60 dB; horizon 1..600 s; payload 1..65536 bytes; cap 0..2");
+    if (o.alternate_retries && !o.fixed_mode.empty())
+        throw std::invalid_argument("alternate retries require the adaptive policy");
     const auto start = Clock::now();
     const double cpu_start = cpu_seconds();
     const auto channel_start = Clock::now();
@@ -112,7 +115,10 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
             throw std::invalid_argument("fixed mode exceeds bandwidth cap");
         hooks.policy = [&] { return std::make_shared<FixedPolicy>(o.fixed_mode); };
     }
-    arq::Engine a("LAB1", ca, hooks), b("LAB2", cb, hooks);
+    auto caller_hooks = hooks;
+    if (o.alternate_retries)
+        caller_hooks.policy = [] { return std::make_shared<AlternatingRetryPolicy>(); };
+    arq::Engine a("LAB1", ca, caller_hooks), b("LAB2", cb, hooks);
     std::array<int, 2> sent{}, heard{}, lost{};
     auto tx = [&](int endpoint, const arq::TxBurstPtr& burst) {
         ++sent[endpoint];
@@ -256,6 +262,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     return "{\"schema\":1,\"workload_kind\":\"two_endpoint_loopback\",\"revision\":" + arq::json_str(DATA2G_LAB_REVISION)
         + ",\"version\":" + arq::json_str(DATA2G_VERSION) + ",\"channel\":" + arq::json_str(o.channel)
         + ",\"fixed_mode\":" + arq::json_str(o.fixed_mode)
+        + ",\"caller_retry_policy\":" + arq::json_str(o.alternate_retries ? "alternating_cpm" : "shipped")
         + ",\"compiler\":" + arq::json_str(
 #ifdef _MSC_VER
             "MSVC"

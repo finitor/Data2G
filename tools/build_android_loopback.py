@@ -64,7 +64,7 @@ def main():
     run([bt / 'd8', '--min-api', '29', '--lib', android, '--output', dex, *sorted(classes.rglob('*.class'))], env)
     base = build / 'base.apk'
     run([bt / 'aapt2', 'link', '-I', android, '--manifest', source / 'AndroidManifest.xml',
-         '--version-code', '1', '--version-name', '0.5.1-lab', '-o', base], env)
+         '--version-code', '2', '--version-name', '0.5.1-lab2', '-o', base], env)
     with zipfile.ZipFile(base, 'a') as archive:
         archive.write(dex / 'classes.dex', 'classes.dex')
         archive.write(build / 'libdata2g_lab.so', f'lib/{args.abi}/libdata2g_lab.so')

@@ -72,8 +72,11 @@ models and normalization.
 Both engines take 100 ms blocks on one sample clock with a symmetric
 one-block transport delay. Complete bursts use the existing `tx_burst`
 hook for the reference FFT analytic-signal transform, avoiding blockwise
-Hilbert artifacts; delayed tails are retained. Operation is synchronous
-and virtual-time: decoder elapsed time does not delay protocol events.
+Hilbert artifacts; delayed tails are retained. Operation uses synchronous
+engines and a sample clock. The CLI is unpaced
+by default; `--paced` waits for that clock to catch up with wall time.
+Android profiling defaults to paced. Decoder elapsed time does not alter
+protocol events or cause simulated audio drops.
 The production DD wall-time budget is retained and recorded, so sufficiently
 slow hardware can still produce different outcomes.
 
@@ -93,6 +96,10 @@ uses the generator's configuration-specific executable path. Resource
 adapters support Windows and POSIX; initial validation is macOS ARM64 and
 Android ARM64. Configure `DATA2G_LAB_REVISION` with a revision/worktree
 fingerprint for pinned results; the default `unknown` is not a pinned build.
+
+`--paced` records late simulated block ends and maximum lateness. This
+helps identify when the workload cannot maintain its requested cadence;
+it does not measure live audio queue drops or worker reply deadlines.
 
 JSON goes to stdout and optionally `--output FILE`; progress goes to stderr.
 Exit codes: 0 complete, 1 incomplete/cancelled, 2 configuration/runtime error.
@@ -126,20 +133,68 @@ size, then Run. Keep it visible: leaving cancels between engine steps and
 may take an in-progress decode to finish. Rotation retains the activity.
 There is no background service or automatic radio startup.
 
+The **Results & graphs** tab displays reports directly in the app. It
+restores the last report at startup, can open historical runs, and imports
+JSON through Files/Downloads. Schema-1 reports remain readable and explain
+that they have no timeline data. Android can also offer Data2G Lab as a
+viewer for JSON files.
+
 Each completed trial checkpoints historical `run-TIMESTAMP.json` and
 `latest.json` in the external files directory. **Export JSON results** uses
 Android's document picker. Device RAM, app PSS/private-dirty memory, Android
-version and thermal status accompany native trial records. Peak RSS is a
+version and thermal status accompany native trial records. Schema-2 exports
+include the profiling timeline and scenario start/end markers. Peak RSS is a
 process-lifetime high-water mark, not fresh per-trial allocation.
 
 For an ADB smoke check (use `--ez suite true` for the quick suite):
 
 ```sh
 adb -s DEVICE_SERIAL shell am start -S -n org.cleverdomain.data2g.lab/.MainActivity \
-  --ez auto true --es channel clean --es snr 12 --ei bytes 64 --ei horizon 180 --ei threads 1
+  --ez auto true --es channel clean --es snr 12 --ei bytes 64 --ei horizon 180 --ei threads 1 \
+  --ez paced true --ez profiling true --ei repeats 1
 adb -s DEVICE_SERIAL shell run-as org.cleverdomain.data2g.lab \
   cat /sdcard/Android/data/org.cleverdomain.data2g.lab/files/latest.json
 ```
+
+## Timeline profiling and graphs
+
+The Android app samples process CPU time and current RSS approximately
+once every 250 ms on a separate observer thread. CPU percentage is the
+change in process CPU milliseconds divided by elapsed monotonic wall time:
+**100% means one occupied CPU core** and values may exceed 100%. All app
+threads count, including native workers, UI and the observer. This is not
+system-wide CPU utilization or a single-endpoint modem measurement.
+
+PSS/private-dirty memory is sampled about once per second because it is
+more expensive. Reused observations retain their age. The thermal charts
+show **battery temperature** and Android's 0–6 **thermal severity**, neither
+of which is a CPU temperature sensor. Battery readings may update slowly.
+Unavailable readings are null and create gaps; they are not replaced by zero.
+
+Graphs use actual elapsed seconds, with scenario boundaries and tappable
+sample inspection. RSS/PSS, CPU, battery temperature and thermal state use
+separate labeled plots. Sampling wall cost, actual timestamps, raw counters
+and cached-reading ages are exported. The observer keeps at most 12000
+samples and explicitly reports truncation of old samples. Live graph updates
+are limited to about once per second. Profiling can be disabled for a comparison without the periodic
+sampler; drawing and sampling otherwise add to resource use.
+
+Choose **Wall-clock paced profiling** for representative duty cycle and
+**Unpaced stress / correctness** for maximum-speed experiments. Repetitions
+(1–100) repeat each selected case, incrementing its seed. This supports
+longer observation, but a short graph alone cannot qualify sustained heat
+or thermal throttling. Cancellation saves partial results and samples.
+
+The UI runs only the two-endpoint workload today. Exports identify it with
+`workload_kind=two_endpoint_loopback` and a whole-app resource scope. Existing
+single-endpoint replay, receiver microbenchmarks and protocol stress drivers
+remain distinct workloads to integrate; the viewer is not evidence that
+those drivers are already packaged in this APK.
+
+API semantics: [process CPU time](https://developer.android.com/reference/android/os/Process#getElapsedCpuTime()),
+[process memory](https://developer.android.com/reference/android/os/Debug#getMemoryInfo(android.os.Debug.MemoryInfo)),
+[thermal severity](https://developer.android.com/reference/android/os/PowerManager#getCurrentThermalStatus()),
+and [battery temperature](https://developer.android.com/reference/android/os/BatteryManager#EXTRA_TEMPERATURE).
 
 ## Metrics and limits
 

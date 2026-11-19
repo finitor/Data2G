@@ -26,7 +26,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_org_cleverdomain_data2g_lab_MainActivity_nativeReset(JNIEnv*, jobject) { cancelled = false; }
 extern "C" JNIEXPORT jstring JNICALL
 Java_org_cleverdomain_data2g_lab_MainActivity_nativeRun(JNIEnv* env, jobject self, jstring channel,
-                                                     jdouble snr, jlong seed, jint bytes, jint horizon, jint threads) {
+                                                     jdouble snr, jlong seed, jint bytes, jint horizon, jint threads, jboolean paced) {
     try {
         if (threads < 1 || threads > 32 || bytes < 1 || seed < 0) throw std::invalid_argument("invalid run settings");
         data2g::pool::set_threads(threads);
@@ -36,6 +36,7 @@ Java_org_cleverdomain_data2g_lab_MainActivity_nativeRun(JNIEnv* env, jobject sel
         o.seed = static_cast<std::uint64_t>(seed);
         o.bytes_each_way = static_cast<std::size_t>(bytes);
         o.horizon_s = horizon;
+        o.paced = paced;
         const jclass cls = env->GetObjectClass(self);
         const jmethodID notify = env->GetMethodID(cls, "progress", "(Ljava/lang/String;)V");
         if (!notify) return nullptr;

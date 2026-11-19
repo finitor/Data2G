@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <span>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -104,6 +105,9 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     Steps astep, bstep;
     b.listen();
     a.connect("LAB2", o.bandwidth_cap);
+    const auto pace_start = Clock::now();
+    double max_late_ms = 0;
+    int pacing_overruns = 0;
     const auto blocks = static_cast<int>(o.horizon_s * config::FS / BLOCK);
     for (int block = 0; block < blocks; ++block) {
         if (cancel.load()) { outcome = "cancelled"; break; }
@@ -125,6 +129,20 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         got_b.insert(got_b.end(), rb.begin(), rb.end());
         for (auto& e : a.events()) events.push_back("A " + e);
         for (auto& e : b.events()) events.push_back("B " + e);
+        if (o.paced) {
+            const auto target = pace_start + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(a.now()));
+            const double late = std::chrono::duration<double, std::milli>(Clock::now() - target).count();
+            if (late > 0) { max_late_ms = std::max(max_late_ms, late); ++pacing_overruns; }
+            // Interruptible quiet periods. A late block catches up on this
+            // same clock; no claims about hardware audio queues or drops.
+            while (!cancel.load() && Clock::now() < target) {
+                const auto remaining = target - Clock::now();
+                if (remaining > Clock::duration::zero())
+                    std::this_thread::sleep_for(std::min(remaining,
+                        std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(20))));
+            }
+            if (cancel.load()) { outcome = "cancelled"; break; }
+        }
         if (got_a.size() > down.size() || got_b.size() > up.size()
             || !std::equal(got_a.begin(), got_a.end(), down.begin()) || !std::equal(got_b.begin(), got_b.end(), up.begin())) {
             outcome = "data_mismatch";
@@ -169,7 +187,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     for (const auto& e : events) { if (ev.size() > 1) ev += ','; ev += arq::json_str(e); }
     ev += ']';
     auto flag = [](bool b) { return b ? "true" : "false"; };
-    return "{\"schema\":1,\"revision\":" + arq::json_str(DATA2G_LAB_REVISION)
+    return "{\"schema\":1,\"workload_kind\":\"two_endpoint_loopback\",\"revision\":" + arq::json_str(DATA2G_LAB_REVISION)
         + ",\"version\":" + arq::json_str(DATA2G_VERSION) + ",\"channel\":" + arq::json_str(o.channel)
         + ",\"compiler\":" + arq::json_str(
 #ifdef _MSC_VER
@@ -191,6 +209,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         + ",\"ack_s\":" + arq::json_num(ack_s) + ",\"verified_at_a\":" + std::to_string(got_a.size())
         + ",\"verified_at_b\":" + std::to_string(got_b.size()) + ",\"simulated_s\":" + arq::json_num(simulated)
         + ",\"wall_s\":" + arq::json_num(wall) + ",\"process_cpu_s\":" + arq::json_num(cpu_seconds() - cpu_start)
+        + ",\"clock_mode\":" + arq::json_str(o.paced ? "wall_clock_paced" : "virtual_unpaced")
+        + ",\"pacing_overruns\":" + std::to_string(pacing_overruns) + ",\"max_pacing_lateness_ms\":" + arq::json_num(max_late_ms)
         + ",\"channel_wall_s\":" + arq::json_num(channel_wall_s) + ",\"record_dir\":" + arq::json_str(o.record_dir)
         + ",\"process_lifetime_peak_rss_bytes\":" + std::to_string(peak_rss())
         + ",\"a_engine_step\":" + astep.json() + ",\"b_engine_step\":" + bstep.json()
@@ -198,7 +218,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         + ",\"a_heard\":" + std::to_string(heard[0]) + ",\"b_heard\":" + std::to_string(heard[1])
         + ",\"a_lost\":" + std::to_string(lost[0]) + ",\"b_lost\":" + std::to_string(lost[1])
         + ",\"events\":" + ev
-        + ",\"limits\":[\"virtual-time synchronous engines; not a real-time qualification\","
+        + ",\"limits\":[\"synchronous simulation with optional wall-clock pacing; not live-audio deadline qualification\","
           "\"shared reciprocal fading; independent receiver noise\",\"no radio, USB audio, clock drift or interference\","
           "\"selected Gaussian-scatter presets; not ITU simulator certification\","
           "\"engine step timing includes TX and RX work; not isolated decoder latency\"]}";

@@ -35,13 +35,14 @@ int main(int argc, char** argv) {
             else if (flag == "--cap") o.bandwidth_cap = std::stoi(value());
             else if (flag == "--threads") threads = std::stoi(value());
             else if (flag == "--record-dir") o.record_dir = value();
+            else if (flag == "--paced") o.paced = true;
             else if (flag == "--output") output = value();
             else if (flag == "--channel-probe") probe = true;
             else if (flag == "--help") {
                 std::puts("data2g-loopback [--channel clean|awgn|mpg|mpp|mpd|nvis|hilat] [--snr DB]\n"
                           "  [--seed N] [--bytes N] [--horizon SECONDS] [--cfo HZ] [--cap 0|1|2]\n"
-                          "  [--threads N] [--record-dir NEW_DIR] [--output FILE]\n"
-                          "Virtual time only. JSON to stdout (and optionally FILE); progress to stderr.\n"
+                          "  [--threads N] [--paced] [--record-dir NEW_DIR] [--output FILE]\n"
+                          "Synchronous simulation, optionally paced to wall time. JSON to stdout; progress to stderr.\n"
                           "Exit 0=complete, 1=trial incomplete, 2=configuration/runtime error.");
                 return 0;
             } else throw std::invalid_argument("unknown option: " + flag);

@@ -2,10 +2,12 @@
 #include "channel.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "util/pool.hpp"
@@ -52,6 +54,16 @@ int main() {
         o.horizon_s = 1;
         const auto timeout = run(o, go);
         require(timeout.find("\"outcome\":\"connect_timeout\"") != std::string::npos, "horizon excludes late completion");
+        o.paced = true;
+        const auto start = std::chrono::steady_clock::now();
+        const auto paced = run(o, go);
+        require(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >= .99,
+                "paced simulation cannot finish a second of audio faster than wall time");
+        require(paced.find("\"clock_mode\":\"wall_clock_paced\"") != std::string::npos, "pacing recorded in result");
+        std::atomic_bool stop{false};
+        std::jthread stopper([&] { std::this_thread::sleep_for(std::chrono::milliseconds(150)); stop = true; });
+        require(run(o, stop).find("\"outcome\":\"cancelled\"") != std::string::npos,
+                "cancellation interrupts a paced quiet period");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());

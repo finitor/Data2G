@@ -1,6 +1,7 @@
 #include "runner.hpp"
 #include "channel.hpp"
 #include "metrics.hpp"
+#include "goodput.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,22 @@ namespace data2g::lab {
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr int BLOCK = config::FS / 10;
+
+// The fixed policy from scripts/linksim.py: reuse native mode metadata,
+// without quietly retaining adaptive recommendations or outcome state.
+class FixedPolicy final : public arq::Policy {
+public:
+    explicit FixedPolicy(std::string mode) : mode_(std::move(mode)) { arq::mode_at(mode_); }
+    std::pair<std::string, int> choose(arq::Station&, int) override { return {mode_, 2}; }
+    int payload_bytes(const std::string& m) override { return arq::payload_bytes(arq::mode_at(m)); }
+    int ctl_payload_bytes(const std::string& m) override { return arq::ctl_payload_bytes(arq::mode_at(m)); }
+    int max_ctl(const std::string& m) override { return arq::max_ctl(arq::mode_at(m)); }
+    int rv_cycle(const std::string& m) override { return arq::rv_cycle(arq::mode_at(m)); }
+    std::string connect_mode(int, int) override { return mode_; }
+    double airtime(const std::string& m, int n, bool dup) override { return arq::burst_seconds(arq::mode_at(m), n, dup); }
+private:
+    std::string mode_;
+};
 
 struct Lane {
     std::deque<double> signal;
@@ -62,7 +79,8 @@ struct Steps {
 }
 
 std::string run(const Options& o, const std::atomic_bool& cancel,
-                const std::function<void(const std::string&)>& progress) {
+                const std::function<void(const std::string&)>& progress,
+                const std::function<void(const std::string&)>& transfer) {
     const auto p = profile(o.channel);
     if (!std::isfinite(o.snr_db) || o.snr_db < -30 || o.snr_db > 60 || o.horizon_s < 1 || o.horizon_s > 600
         || !std::isfinite(o.horizon_s) || o.bytes_each_way < 1 || o.bytes_each_way > 65536
@@ -88,12 +106,28 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     }
     // Virtual time, synchronous decode. No OS audio, radio or host sockets.
     ca.worker = cb.worker = false;
-    arq::Engine a("LAB1", ca), b("LAB2", cb);
+    arq::EngineHooks hooks;
+    if (!o.fixed_mode.empty()) {
+        if (arq::width_hz(arq::mode_at(o.fixed_mode)) > arq::cap_hz(o.bandwidth_cap))
+            throw std::invalid_argument("fixed mode exceeds bandwidth cap");
+        hooks.policy = [&] { return std::make_shared<FixedPolicy>(o.fixed_mode); };
+    }
+    arq::Engine a("LAB1", ca, hooks), b("LAB2", cb, hooks);
     std::array<int, 2> sent{}, heard{}, lost{};
-    a.set_on_send([&](const arq::TxBurstPtr&) { ++sent[0]; });
-    b.set_on_send([&](const arq::TxBurstPtr&) { ++sent[1]; });
-    a.set_on_burst([&](const arq::BurstHeard& h) { ++heard[0]; lost[0] += h.lost; });
-    b.set_on_burst([&](const arq::BurstHeard& h) { ++heard[1]; lost[1] += h.lost; });
+    auto tx = [&](int endpoint, const arq::TxBurstPtr& burst) {
+        ++sent[endpoint];
+        if (progress) progress(std::string(endpoint ? "B TX " : "A TX ") + burst->submode
+            + " at channel " + arq::json_num(endpoint ? b.now() : a.now()) + " s, " + std::to_string(burst->slots.size()) + " slots");
+    };
+    auto rx = [&](int endpoint, const arq::BurstHeard& h) {
+        ++heard[endpoint]; lost[endpoint] += h.lost;
+        if (progress) progress(std::string(endpoint ? "B RX " : "A RX ") + h.submode
+            + " at channel " + arq::json_num(h.t) + " s" + (h.lost ? " (lost)" : ""));
+    };
+    a.set_on_send([&](const arq::TxBurstPtr& burst) { tx(0, burst); });
+    b.set_on_send([&](const arq::TxBurstPtr& burst) { tx(1, burst); });
+    a.set_on_burst([&](const arq::BurstHeard& h) { rx(0, h); });
+    b.set_on_burst([&](const arq::BurstHeard& h) { rx(1, h); });
     Random data(o.seed ^ UINT64_C(0xdaa));
     arq::Bytes up(o.bytes_each_way), down(o.bytes_each_way), got_a, got_b;
     for (auto& v : up) v = static_cast<std::uint8_t>(data.next() & 255);
@@ -103,6 +137,34 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     std::string outcome = "connect_timeout";
     std::vector<std::string> events;
     Steps astep, bstep;
+    Goodput goodput;
+    std::size_t ack_ab = 0, ack_ba = 0;
+    std::size_t verified_a = 0, verified_b = 0;
+    std::string transfer_trace = "[";
+    double last_transfer_t = -1;
+    auto report_transfer = [&](bool force) {
+        if (wrote && a.session().station && b.session().station
+            && a.session().state == arq::SessionState::CONNECTED && b.session().state == arq::SessionState::CONNECTED) {
+            auto count = [&](const arq::Session::Queued& q) {
+                return o.bytes_each_way - static_cast<std::size_t>(std::clamp<std::int64_t>(q.unacked, 0, o.bytes_each_way));
+            };
+            ack_ab = std::max(ack_ab, count(a.session().queued_bytes()));
+            ack_ba = std::max(ack_ba, count(b.session().queued_bytes()));
+        }
+        goodput.add(a.now(), {verified_b, verified_a, ack_ab, ack_ba});
+        if (a.now() == last_transfer_t || (!force && a.now() - last_transfer_t < 1)) return;
+        last_transfer_t = a.now();
+        const auto rates = goodput.bps();
+        const std::string point = "{\"simulated_s\":" + arq::json_num(a.now())
+            + ",\"wall_s\":" + arq::json_num(std::chrono::duration<double>(Clock::now() - start).count())
+            + ",\"delivered_ab_bytes\":" + std::to_string(verified_b) + ",\"delivered_ba_bytes\":" + std::to_string(verified_a)
+            + ",\"acked_ab_bytes\":" + std::to_string(ack_ab) + ",\"acked_ba_bytes\":" + std::to_string(ack_ba)
+            + ",\"delivered_ab_bps\":" + arq::json_num(rates[0]) + ",\"delivered_ba_bps\":" + arq::json_num(rates[1])
+            + ",\"acked_ab_bps\":" + arq::json_num(rates[2]) + ",\"acked_ba_bps\":" + arq::json_num(rates[3]) + "}";
+        if (transfer_trace.size() > 1) transfer_trace += ',';
+        transfer_trace += point;
+        if (transfer) transfer(point);
+    };
     b.listen();
     a.connect("LAB2", o.bandwidth_cap);
     const auto pace_start = Clock::now();
@@ -127,8 +189,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         const auto ra = a.session().read(), rb = b.session().read();
         got_a.insert(got_a.end(), ra.begin(), ra.end());
         got_b.insert(got_b.end(), rb.begin(), rb.end());
-        for (auto& e : a.events()) events.push_back("A " + e);
-        for (auto& e : b.events()) events.push_back("B " + e);
+        for (auto& e : a.events()) { events.push_back("A " + e); if (progress) progress(events.back()); }
+        for (auto& e : b.events()) { events.push_back("B " + e); if (progress) progress(events.back()); }
         if (o.paced) {
             const auto target = pace_start + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(a.now()));
             const double late = std::chrono::duration<double, std::milli>(Clock::now() - target).count();
@@ -148,6 +210,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
             outcome = "data_mismatch";
             break;
         }
+        verified_a = got_a.size(); verified_b = got_b.size();
+        report_transfer(false);
         if (!wrote && a.session().state == arq::SessionState::CONNECTED && b.session().state == arq::SessionState::CONNECTED) {
             connected = wrote = true;
             connect_s = a.now();
@@ -180,6 +244,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
                      + std::to_string(got_a.size() + got_b.size()) + " verified bytes");
     }
     const double simulated = a.now();
+    report_transfer(true);
+    transfer_trace += ']';
     a.stop();
     b.stop();
     const double wall = std::chrono::duration<double>(Clock::now() - start).count();
@@ -189,6 +255,7 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
     auto flag = [](bool b) { return b ? "true" : "false"; };
     return "{\"schema\":1,\"workload_kind\":\"two_endpoint_loopback\",\"revision\":" + arq::json_str(DATA2G_LAB_REVISION)
         + ",\"version\":" + arq::json_str(DATA2G_VERSION) + ",\"channel\":" + arq::json_str(o.channel)
+        + ",\"fixed_mode\":" + arq::json_str(o.fixed_mode)
         + ",\"compiler\":" + arq::json_str(
 #ifdef _MSC_VER
             "MSVC"
@@ -206,8 +273,8 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         + ",\"outcome\":" + arq::json_str(outcome) + ",\"connected\":" + flag(connected)
         + ",\"delivered\":" + flag(delivered) + ",\"acknowledged\":" + flag(acked) + ",\"disconnected\":" + flag(closed)
         + ",\"connect_s\":" + arq::json_num(connect_s) + ",\"delivery_s\":" + arq::json_num(delivery_s)
-        + ",\"ack_s\":" + arq::json_num(ack_s) + ",\"verified_at_a\":" + std::to_string(got_a.size())
-        + ",\"verified_at_b\":" + std::to_string(got_b.size()) + ",\"simulated_s\":" + arq::json_num(simulated)
+        + ",\"ack_s\":" + arq::json_num(ack_s) + ",\"verified_at_a\":" + std::to_string(verified_a)
+        + ",\"verified_at_b\":" + std::to_string(verified_b) + ",\"simulated_s\":" + arq::json_num(simulated)
         + ",\"wall_s\":" + arq::json_num(wall) + ",\"process_cpu_s\":" + arq::json_num(cpu_seconds() - cpu_start)
         + ",\"clock_mode\":" + arq::json_str(o.paced ? "wall_clock_paced" : "virtual_unpaced")
         + ",\"pacing_overruns\":" + std::to_string(pacing_overruns) + ",\"max_pacing_lateness_ms\":" + arq::json_num(max_late_ms)
@@ -218,6 +285,10 @@ std::string run(const Options& o, const std::atomic_bool& cancel,
         + ",\"a_heard\":" + std::to_string(heard[0]) + ",\"b_heard\":" + std::to_string(heard[1])
         + ",\"a_lost\":" + std::to_string(lost[0]) + ",\"b_lost\":" + std::to_string(lost[1])
         + ",\"events\":" + ev
+        + ",\"goodput_clock\":\"simulated_channel_time\",\"goodput_window_s\":30,\"goodput_warmup\":\"uses elapsed channel time until 30 seconds\""
+        + ",\"delivered_average_bps\":" + arq::json_num(simulated > 0 ? 8.0 * (verified_a + verified_b) / simulated : 0)
+        + ",\"acknowledged_ab_bytes\":" + std::to_string(ack_ab) + ",\"acknowledged_ba_bytes\":" + std::to_string(ack_ba)
+        + ",\"transfer_trace\":" + transfer_trace
         + ",\"limits\":[\"synchronous simulation with optional wall-clock pacing; not live-audio deadline qualification\","
           "\"shared reciprocal fading; independent receiver noise\",\"no radio, USB audio, clock drift or interference\","
           "\"selected Gaussian-scatter presets; not ITU simulator certification\","

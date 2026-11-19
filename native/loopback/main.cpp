@@ -1,5 +1,6 @@
 #include "runner.hpp"
 #include "channel.hpp"
+#include "campaign.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -17,8 +18,11 @@
 int main(int argc, char** argv) {
     try {
         data2g::lab::Options o;
-        int threads = 1;
+        int threads = 0;
         bool probe = false;
+        bool burst = false;
+        int trials = 1;
+        std::string campaign;
         std::string output;
         for (int i = 1; i < argc; ++i) {
             const std::string flag = argv[i];
@@ -36,19 +40,30 @@ int main(int argc, char** argv) {
             else if (flag == "--threads") threads = std::stoi(value());
             else if (flag == "--record-dir") o.record_dir = value();
             else if (flag == "--paced") o.paced = true;
+            else if (flag == "--fixed-mode") o.fixed_mode = value();
+            else if (flag == "--cpm-burst") burst = true;
+            else if (flag == "--list-campaign") campaign = value();
+            else if (flag == "--trials") trials = std::stoi(value());
             else if (flag == "--output") output = value();
             else if (flag == "--channel-probe") probe = true;
             else if (flag == "--help") {
-                std::puts("data2g-loopback [--channel clean|awgn|mpg|mpp|mpd|nvis|hilat] [--snr DB]\n"
+                std::puts("data2g-loopback [--channel clean|awgn|mpg|mpp|mpd|mps|flutter|nvis|hilat] [--snr DB]\n"
                           "  [--seed N] [--bytes N] [--horizon SECONDS] [--cfo HZ] [--cap 0|1|2]\n"
-                          "  [--threads N] [--paced] [--record-dir NEW_DIR] [--output FILE]\n"
+                          "  [--threads N (0=auto)] [--fixed-mode MODE] [--cpm-burst] [--paced] [--record-dir NEW_DIR] [--output FILE]\n"
+                          "  --list-campaign cpm_floor|hf_sessions|hf_extreme [--trials N]: case plan as JSONL\n"
                           "Synchronous simulation, optionally paced to wall time. JSON to stdout; progress to stderr.\n"
                           "Exit 0=complete, 1=trial incomplete, 2=configuration/runtime error.");
                 return 0;
             } else throw std::invalid_argument("unknown option: " + flag);
         }
-        if (threads < 1 || threads > 32) throw std::invalid_argument("threads must be 1..32");
+        if (threads < 0 || threads > 32) throw std::invalid_argument("threads must be 0 (auto) or 1..32");
         data2g::pool::set_threads(threads);
+        if (!campaign.empty()) {
+            const auto count = data2g::lab::campaign_size(campaign, trials);
+            for (std::size_t i = 0; i < count; ++i)
+                std::cout << data2g::lab::campaign_case_json(data2g::lab::campaign_case(campaign, i, trials, o.seed)) << '\n';
+            return 0;
+        }
         if (probe) {
             data2g::lab::Channel ch(data2g::lab::profile(o.channel), o.seed, o.horizon_s, o.cfo_hz);
             std::cout << std::setprecision(17) << "{\"rate\":" << ch.tap_rate() << ",\"taps\":[";
@@ -76,13 +91,14 @@ int main(int argc, char** argv) {
             return 0;
         }
         const std::atomic_bool cancel{false};
-        const auto result = data2g::lab::run(o, cancel, [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); });
+        const auto result = burst ? data2g::lab::run_cpm_burst(o, cancel)
+            : data2g::lab::run(o, cancel, [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); });
         if (!output.empty()) {
             std::ofstream file(output);
             if (!(file << result << '\n')) throw std::runtime_error("cannot write output file");
         }
         std::cout << result << '\n';
-        return result.find("\"outcome\":\"complete\"") != std::string::npos ? 0 : 1;
+        return result.find("\"outcome\":\"complete\"") != std::string::npos || result.find("\"outcome\":\"measured\"") != std::string::npos ? 0 : 1;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "data2g-loopback: %s\n", e.what());
         return 2;

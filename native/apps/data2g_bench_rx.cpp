@@ -513,4 +513,5 @@ int main(int argc, char** argv) {
                     best.refines, 1e3 * best.plock, 1e3 * best.primed, best.genie ? " genie" : "",
                     best.plocked ? " plock" : "", best.pok ? " pok" : "");
     }
+    return 0;  // also callable through the Android diagnostic program wrapper
 }

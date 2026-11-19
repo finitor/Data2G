@@ -19,6 +19,7 @@ final class TimelineChart extends View {
     private final String unit;
     private final double divisor, minimumTop;
     private final boolean thermal;
+    private String timeKey = "elapsed_s";
     private JSONArray points = new JSONArray(), markers = new JSONArray();
     private int selected = -1;
     private final float dp;
@@ -31,6 +32,7 @@ final class TimelineChart extends View {
         setMinimumHeight((int)(200 * dp));
         setContentDescription(String.join(", ", names) + " timeline. Tap to inspect a sample.");
     }
+    TimelineChart clock(String key) { timeKey = key; return this; }
     void data(JSONObject profile) {
         points = profile.optJSONArray("samples");
         if (points == null) points = new JSONArray();
@@ -44,8 +46,8 @@ final class TimelineChart extends View {
         float left = 54 * dp, right = getWidth() - 12 * dp, top = 28 * dp, bottom = getHeight() - (keys.length > 1 ? 58 : 44) * dp;
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
         paint.setTextSize(11 * dp); paint.setStrokeWidth(dp);
-        double first = points.length() == 0 ? 0 : points.optJSONObject(0).optDouble("elapsed_s", 0);
-        double last = points.length() == 0 ? 1 : points.optJSONObject(points.length() - 1).optDouble("elapsed_s", 1);
+        double first = points.length() == 0 ? 0 : points.optJSONObject(0).optDouble(timeKey, 0);
+        double last = points.length() == 0 ? 1 : points.optJSONObject(points.length() - 1).optDouble(timeKey, 1);
         double end = Math.max(first + .25, last), low = 0, high = minimumTop;
         boolean hasValue = false;
         for (int i = 0; i < points.length(); ++i)
@@ -86,7 +88,7 @@ final class TimelineChart extends View {
             paint.setColor(COLORS[k % COLORS.length]); paint.setStrokeWidth(2 * dp);
             for (int i = 0; i < points.length(); ++i) {
                 JSONObject p = points.optJSONObject(i);
-                double t = p.optDouble("elapsed_s", Double.NaN), v = p.optDouble(keys[k], Double.NaN) / divisor;
+                double t = p.optDouble(timeKey, Double.NaN), v = p.optDouble(keys[k], Double.NaN) / divisor;
                 if (!Double.isFinite(t) || !Double.isFinite(v)) { connected = false; continue; }
                 float x = left + (float)((t - first) / (end - first)) * (right - left);
                 float y = bottom - (float)((v - low) / (high - low)) * (bottom - top);
@@ -106,7 +108,7 @@ final class TimelineChart extends View {
             c.drawText(value, left, getHeight() - (8 + 14 * (keys.length - k - 1)) * dp, paint);
         }
         if (selected >= 0 && selected < points.length()) {
-            double t = points.optJSONObject(selected).optDouble("elapsed_s", first);
+            double t = points.optJSONObject(selected).optDouble(timeKey, first);
             float x = left + (float)((t - first) / (end - first)) * (right - left);
             paint.setColor(Color.GRAY); paint.setStrokeWidth(dp); c.drawLine(x, top, x, bottom, paint);
             c.drawText(String.format(Locale.US, "At %.2f s", t), left, 12 * dp, paint);
@@ -115,12 +117,12 @@ final class TimelineChart extends View {
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (points.length() == 0) return false;
         if (event.getAction() == MotionEvent.ACTION_DOWN || event.getAction() == MotionEvent.ACTION_MOVE) {
-            double first = points.optJSONObject(0).optDouble("elapsed_s", 0);
-            double last = points.optJSONObject(points.length() - 1).optDouble("elapsed_s", first);
+            double first = points.optJSONObject(0).optDouble(timeKey, 0);
+            double last = points.optJSONObject(points.length() - 1).optDouble(timeKey, first);
             double fraction = Math.max(0, Math.min(1, (event.getX() - 54 * dp) / Math.max(1, getWidth() - 66 * dp)));
             double target = first + fraction * (last - first), best = Double.POSITIVE_INFINITY;
             for (int i = 0; i < points.length(); ++i) {
-                double distance = Math.abs(points.optJSONObject(i).optDouble("elapsed_s", first) - target);
+                double distance = Math.abs(points.optJSONObject(i).optDouble(timeKey, first) - target);
                 if (distance < best) { best = distance; selected = i; }
             }
             invalidate(); return true;

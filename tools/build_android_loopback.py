@@ -6,6 +6,7 @@ The debug APK is for local diagnostics, not a release artifact.
 """
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -47,8 +48,8 @@ def main():
     # Include new/untracked harness sources in the identity; HEAD alone would
     # wrongly identify a prototype as unchanged upstream.
     digest = hashlib.sha256()
-    files = [ROOT / 'native/CMakeLists.txt']
-    for folder in (ROOT / 'native/loopback', source):
+    files = [ROOT / 'native/CMakeLists.txt', Path(__file__).resolve()]
+    for folder in (ROOT / 'native/loopback', ROOT / 'native/core', ROOT / 'native/apps', ROOT / 'native/tests', source):
         files.extend(p for p in folder.rglob('*') if p.is_file())
     for p in sorted(files):
         digest.update(str(p.relative_to(ROOT)).encode())
@@ -58,16 +59,37 @@ def main():
          f'-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake',
          f'-DANDROID_ABI={args.abi}', '-DANDROID_PLATFORM=android-29', '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
          f'-DDATA2G_LAB_REVISION={revision}'], env)
-    run(['cmake', '--build', build, '--target', 'data2g_lab', '--parallel', args.jobs], env)
+    run(['cmake', '--build', build, '--target', 'data2g_lab', 'lab_programs', '--parallel', args.jobs], env)
     java = sorted((source / 'src').rglob('*.java'))
     run(['javac', '--release', '8', '-classpath', android, '-d', classes, *java], env)
     run([bt / 'd8', '--min-api', '29', '--lib', android, '--output', dex, *sorted(classes.rglob('*.class'))], env)
+    assets = build / 'assets'
+    assets.mkdir(exist_ok=True)
+    programs = sorted((build / 'programs').glob('liblab_*.so'))
+    available = {p.name[len('liblab_'):-3] for p in programs}
+    suites = []
+    for test in sorted((ROOT / 'native/tests').glob('test_*.cpp')):
+        suites.append(dict(id=test.stem, available=test.stem in available,
+                           source=str(test.relative_to(ROOT)),
+                           reason='' if test.stem in available else 'Requires desktop Qt/station or external Hamlib backend'))
+    suites.append(dict(id='test_gui', available=False, source='native/gui/test_gui.cpp', reason='Qt Widgets desktop UI'))
+    (assets / 'native-suites.json').write_text(json.dumps(dict(schema=1, suites=suites), indent=2))
     base = build / 'base.apk'
     run([bt / 'aapt2', 'link', '-I', android, '--manifest', source / 'AndroidManifest.xml',
-         '--version-code', '2', '--version-name', '0.5.1-lab2', '-o', base], env)
+         '--version-code', '3', '--version-name', '0.5.1-lab3', '-A', assets, '-o', base], env)
     with zipfile.ZipFile(base, 'a') as archive:
         archive.write(dex / 'classes.dex', 'classes.dex')
-        archive.write(build / 'libdata2g_lab.so', f'lib/{args.abi}/libdata2g_lab.so')
+        # Keep symbols beside the build for profiling; strip only APK copies.
+        llvm_bins = list((ndk / 'toolchains/llvm/prebuilt').glob('*/bin/llvm-strip'))
+        if len(llvm_bins) != 1:
+            raise RuntimeError('cannot locate llvm-strip')
+        staging = build / 'apk-programs'
+        staging.mkdir(exist_ok=True)
+        for binary in [build / 'libdata2g_lab.so', *programs]:
+            packaged = staging / binary.name
+            shutil.copyfile(binary, packaged)
+            run([llvm_bins[0], '--strip-unneeded', packaged], env)
+            archive.write(packaged, f'lib/{args.abi}/{binary.name}')
         # Static core and zlib; only the NDK's C++ shared runtime is dynamic.
         triples = {'arm64-v8a': 'aarch64-linux-android', 'x86_64': 'x86_64-linux-android'}
         runtimes = list((ndk / 'toolchains/llvm/prebuilt').glob(f'*/sysroot/usr/lib/{triples[args.abi]}/libc++_shared.so'))

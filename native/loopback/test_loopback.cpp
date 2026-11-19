@@ -1,5 +1,7 @@
 #include "runner.hpp"
 #include "channel.hpp"
+#include "campaign.hpp"
+#include "goodput.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +23,21 @@ int main() {
     using namespace data2g::lab;
     try {
         data2g::pool::set_threads(1);
+        Goodput meter;
+        meter.add(10, {100, 50, 0, 0});
+        require(std::abs(meter.bps()[0] - 80) < 1e-9 && meter.bps()[2] == 0, "goodput counts unique delivered bytes separately from ACKs");
+        meter.add(20, {100, 50, 100, 50});
+        require(std::abs(meter.bps()[0] - 40) < 1e-9, "unchanged bytes during retransmission do not add goodput");
+        meter.add(41, {100, 50, 100, 50});
+        require(meter.bps()[0] == 0 && meter.bps()[2] > 0, "30-second window expires delivery independently of later ACKs");
+        require(campaign_size("cpm_floor", 100) == 55800, "full six-mode seven-channel floor grid and all seeds");
+        require(campaign_size("hf_extreme", 32) == 3584, "extreme channels, adaptive and six fixed modes, eight SNRs");
+        Options probe;
+        probe.channel = "awgn"; probe.fixed_mode = "fsk8r50-r1/3"; probe.snr_db = 30;
+        const std::atomic_bool probe_go{false};
+        const auto burst = run_cpm_burst(probe, probe_go);
+        require(burst.find("\"base_data_ok\":true") != std::string::npos && burst.find("\"supplied_data_ok\":true") != std::string::npos,
+                "paired CPM baseline and supplied-information diagnostic recover a clean burst");
         Random rng(0);
         require(rng.next() == UINT64_C(0xe220a8397b1dcdaf), "specified PRNG vector");
         double sum = 0, squares = 0;

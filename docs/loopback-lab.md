@@ -1,9 +1,12 @@
-# Native loopback lab prototype
+# Data2G Android Lab and portable native harness
+
+For prerequisites, installation, local validation and updating compiled weights,
+see [build instructions](loopback-lab-build.md).
 
 A reusable native runner with a desktop CLI and a thin Android APK for
 checking the modem on modest hardware. It runs two unmodified C++ engines
 through actual simulated audio and checks application bytes. No radio,
-audio device, network service, Python runtime or Qt is needed on the phone.
+audio device, Python runtime or Qt is needed on the phone. Mock-radio native suites use localhost sockets.
 The separate APK application ID is `org.cleverdomain.data2g.lab`.
 
 ## Existing infrastructure and reuse
@@ -45,6 +48,8 @@ the selected SNR and seed. One seed is a smoke check, not reliability evidence.
 | `mpg` | 0.5 ms | 0.1 Hz |
 | `mpp` | 2 ms | 1 Hz |
 | `mpd` | 4 ms | 2 Hz |
+| `mps` (empirical) | 2 ms | 0.15 Hz |
+| `flutter` | 0.5 ms | 10 Hz |
 | `nvis` | 7 ms | 1 Hz |
 | `hilat` | 7 ms | 30 Hz |
 
@@ -102,7 +107,7 @@ helps identify when the workload cannot maintain its requested cadence;
 it does not measure live audio queue drops or worker reply deadlines.
 
 JSON goes to stdout and optionally `--output FILE`; progress goes to stderr.
-Exit codes: 0 complete, 1 incomplete/cancelled, 2 configuration/runtime error.
+Exit codes: 0 complete or burst measurement, 1 incomplete/cancelled, 2 configuration/runtime error.
 Run additional seeds/SNRs separately and retain failed trials too.
 
 `--record-dir NEW_DIRECTORY` writes the **existing** Recorder format under
@@ -128,33 +133,116 @@ The script only installs with explicit `--install DEVICE_SERIAL`. The APK
 uses the repository's existing public debug key and is debuggable for local
 result retrieval; it is not a release artifact.
 
-Open **Data2G Lab**, choose the profile, SNR, seed, bytes, horizon and pool
-size, then Run. Keep it visible: leaving cancels between engine steps and
-may take an in-progress decode to finish. Rotation retains the activity.
-There is no background service or automatic radio startup.
+Open **Data2G Android Lab** and choose a workload. Pool size defaults to
+**Use modem default**, displaying the core's actual default (4 on the
+8-core Redmi). Uncheck it to override with 1–32. Both requested and effective
+sizes are recorded; original native suites may deliberately change their
+own pool size. FFT threading is separate.
 
-The **Results & graphs** tab displays reports directly in the app. It
-restores the last report at startup, can open historical runs, and imports
-JSON through Files/Downloads. Schema-1 reports remain readable and explain
-that they have no timeline data. Android can also offer Data2G Lab as a
-viewer for JSON files.
+| Workload | Coverage / measurement |
+|---|---|
+| Selected / quick loopback | One session or clean + AWGN + MPP, adaptive or selected fixed CPM policy |
+| Full HF sessions | Adaptive + all 6 fixed CPM modes × 8 channels × 8 SNRs (−16 through +12 dB) = 448 points per seed |
+| Extreme HF sessions | NVIS 7 ms/1 Hz and high latitude 7 ms/30 Hz; 112 points per seed |
+| Full CPM receiver campaign | All 6 modes × 7 channels, exact public `cpm_floor_study.py:e2e_grid` SNRs: 558 points; 100 seeds = 55,800 cases |
+| All / selected native suites | Original 26 hardware-free C++ suites, including ARQ link stress and worker/backlog engine checks |
+| Listening benchmark | Existing `data2g-bench-rx --listen`; one receiver, unpaced |
+| Recording replay | Existing `data2g-replay --worker`, listening as LAB1; import `audio_in.f16` (8 kHz mono little-endian float16) |
+| Burst benchmark | Existing `data2g-bench-rx` on an imported `.d2gb`; stage times and any tool-reported supplied-information fallback |
 
-Each completed trial checkpoints historical `run-TIMESTAMP.json` and
-`latest.json` in the external files directory. **Export JSON results** uses
-Android's document picker. Device RAM, app PSS/private-dirty memory, Android
-version and thermal status accompany native trial records. Schema-2 exports
-include the profiling timeline and scenario start/end markers. Peak RSS is a
-process-lifetime high-water mark, not fresh per-trial allocation.
+The native suite catalog is generated from the build's actual targets:
 
-For an ADB smoke check (use `--ez suite true` for the quick suite):
+| Area | Packaged suites (`test_` prefix) |
+|---|---|
+| Protocol / engine | `arq`, `arq_link`, `arq_phy`, `engine`, `host` |
+| Modem / waveform | `modem`, `receiver`, `cpm`, `waveform`, `constellation`, `equalizer` |
+| Coding | `codes`, `gfldpc`, `ldpc`, `polar` |
+| Audio | `audio`, `cwid` |
+| Receiver helpers | `hand`, `primed`, `monitor` |
+| Utilities / interfaces | `pool`, `tnc` |
+| Radio-interface mocks | `rig`, `rig_bridge`, `rig_bridged`, `rig_cm108` |
+
+Excluded desktop/backend suites: `args`, `realtime`, `rig_hamlib`, `rx_plot`,
+`station_tx`, `tci`, `gui`. Native suite outcomes preserve original assertions,
+exit statuses, output and watchdog behavior rather than replacing tests with
+approximate simulations.
+
+Campaigns expose 1–1000 seeds per point, first seed, starting case index and
+an optional case limit. Preview the count before starting a long run. Session
+horizon, payload and pacing remain configurable; HF grids use a 4.5 Hz CFO.
+CPM diagnostics and the original test/tools run at their own speed; a paced
+session is still synchronous simulation, not live audio qualification.
+The native CPM campaign ports the normal receiver and paired supplied
+timing/CFO/header arm on identical audio. Other Python research arms and
+pytest suites are not embedded. A failed reception is a measurement, not a
+unit-test failure. Seven Qt/station/Hamlib-dependent suites are listed as
+unavailable in the app's coverage dialog, rather than silently skipped.
+
+Keep the app visible: leaving cancels between native steps/slots, and a
+current decode may take time to return. Rotation retains the activity. There
+is no background service or automatic radio startup.
+
+**Console** shows the active workload, case number, selected mode, named
+channel, delay/Doppler spread, SNR and seed. Session output logs actual TX/RX
+modes as adaptation changes them; burst diagnostics report acquisition and
+decode phases. Original native test/tool output is streamed with line
+buffering. The console retains 150 lines and batches UI refreshes; complete
+native program logs are saved per case (8 MiB cap, truncation reported).
+
+**Results & graphs** restores the last report and opens historical runs,
+individual cases, older JSON reports, or an exported campaign ZIP through
+Files. The dashboard retains only three recent attempts. **Browse all
+cases** pages through the full index. Schema 3 stores a `campaign-TIMESTAMP/`
+directory containing `manifest.json`, append-only `index.jsonl`, individual
+case/attempt JSON files, original program logs, retained input recordings,
+and resource segments. Export saves the complete directory as ZIP without
+loading all trials into memory. Imported ZIPs are read without extraction.
+
+**Resume this campaign** recovers the index, preserves prior attempts and
+retries a cancelled case. A new profiling segment starts at wall time zero;
+exports retain previous segments. The viewer shows the most recent segment.
+Changing native source/weights requires a new run: the source identity is
+HEAD plus a fingerprint covering the native core (including generated
+weights), tests/tools and harness. New trained weights can be built into a
+replacement APK without changing the harness. Existing results stay tied to
+the payload that produced them. Harness validation with current weights is
+not qualification of the future retrained model.
+
+For an ADB smoke check (always select a specific device):
 
 ```sh
-adb -s DEVICE_SERIAL shell am start -S -n org.cleverdomain.data2g.lab/.MainActivity \
-  --ez auto true --es channel clean --es snr 12 --ei bytes 64 --ei horizon 180 --ei threads 1 \
-  --ez paced true --ez profiling true --ei repeats 1
-adb -s DEVICE_SERIAL shell run-as org.cleverdomain.data2g.lab \
-  cat /sdcard/Android/data/org.cleverdomain.data2g.lab/files/latest.json
+adb -s DEVICE_SERIAL shell am start -n org.cleverdomain.data2g.lab/.MainActivity \
+  --ez auto true --es workload quick --es snr 12 --ei bytes 64 --ei horizon 180 \
+  --ei threads 0 --ez paced true --ez profiling true --ei repeats 1
 ```
+
+Other `workload` values: `custom`, `hf_sessions`, `hf_extreme`, `cpm_floor`,
+`native_all`, `native_one`, `listen`, `replay`, `burst`. `--ei first N` and
+`--ei limit N` select a subset. `native_one` accepts `--es native_suite test_arq_link`.
+Recordings are imported in the UI. `--ez auto true --ez resume true` resumes
+the last local campaign. Launch a fresh activity for automation only when
+there is no user run to interrupt. On MIUI devices that block USB installs,
+push the APK to Downloads and install/update it through Files.
+
+The desktop CLI exposes the same case plan as JSONL:
+
+```sh
+native/build-loopback/data2g-loopback --list-campaign cpm_floor --trials 100 --seed 50000
+native/build-loopback/data2g-loopback --cpm-burst --fixed-mode fsk8r50-r1/3 \
+  --channel hilat --snr -4 --seed 50000 --threads 0
+```
+
+To build/run the original hardware-free native suites locally:
+
+```sh
+cmake -S native/loopback -B native/build-loopback -DDATA2G_LAB_NATIVE_SUITES=ON
+cmake --build native/build-loopback --parallel 6
+ctest --test-dir native/build-loopback --output-on-failure
+python native/loopback/check_campaign.py native/build-loopback/data2g-loopback
+```
+
+Only the reference comparison scripts need NumPy/SciPy. All builds and
+validation are local; GitHub-hosted CI remains disabled.
 
 ## Timeline profiling and graphs
 
@@ -162,7 +250,7 @@ The Android app samples process CPU time and current RSS approximately
 once every 250 ms on a separate observer thread. CPU percentage is the
 change in process CPU milliseconds divided by elapsed monotonic wall time:
 **100% means one occupied CPU core** and values may exceed 100%. All app
-threads count, including native workers, UI and the observer. This is not
+threads and the active native child count, including workers, UI and the observer. Child CPU uses same-UID `/proc` counters, with final native CPU/RSS accounting where available. This is not
 system-wide CPU utilization or a single-endpoint modem measurement.
 
 PSS/private-dirty memory is sampled about once per second because it is
@@ -171,25 +259,38 @@ show **battery temperature** and Android's 0–6 **thermal severity**, neither
 of which is a CPU temperature sensor. Battery readings may update slowly.
 Unavailable readings are null and create gaps; they are not replaced by zero.
 
+The single memory graph shows **Lab (estimate)** and **Available** as
+percentages of the phone's total usable RAM. Its caption reports the latest
+shares, usable/available GB, and Android's low-memory threshold. PSS is used
+for the lab when available; RSS is an explicitly approximate fallback.
+Available memory includes reclaimable cache and is not a promise that one
+allocation of that size will succeed. Historical reports can show lab share
+when total RAM was recorded, but no historical availability is invented.
+Raw RSS/PSS and byte counters remain in exports. Displayed GB/MB in this
+caption are decimal; older detailed MiB values use 1,048,576 bytes per MiB.
+
 Graphs use actual elapsed seconds, with scenario boundaries and tappable
-sample inspection. RSS/PSS, CPU, battery temperature and thermal state use
+sample inspection. Memory, CPU, battery temperature and thermal state use
 separate labeled plots. Sampling wall cost, actual timestamps, raw counters
 and cached-reading ages are exported. The observer keeps at most 12000
-samples and explicitly reports truncation of old samples. Live graph updates
+samples and 2000 markers for the viewer and explicitly reports truncation. An append-only resource JSONL journal retains all samples and markers on disk. Live graph updates
 are limited to about once per second. Profiling can be disabled for a comparison without the periodic
 sampler; drawing and sampling otherwise add to resource use.
 
 Choose **Wall-clock paced profiling** for representative duty cycle and
-**Unpaced stress / correctness** for maximum-speed experiments. Repetitions
-(1–100) repeat each selected case, incrementing its seed. This supports
+**Unpaced loopbacks** for maximum-speed experiments. Repetitions
+(1–1000) repeat each selected case, incrementing its seed. This supports
 longer observation, but a short graph alone cannot qualify sustained heat
 or thermal throttling. Cancellation saves partial results and samples.
 
-The UI runs only the two-endpoint workload today. Exports identify it with
-`workload_kind=two_endpoint_loopback` and a whole-app resource scope. Existing
-single-endpoint replay, receiver microbenchmarks and protocol stress drivers
-remain distinct workloads to integrate; the viewer is not evidence that
-those drivers are already packaged in this APK.
+Sessions show a continuous **30-second trailing goodput** indicator and
+per-direction delivered/acknowledged graphs. Counters count unique verified
+application bytes; retransmissions do not increase goodput. The clock is
+simulated channel time, so unpaced processing speed does not inflate the
+radio rate. Warmup uses elapsed channel time below 30 seconds; stalls decay
+to zero. Whole-session delivery average counts both directions and includes
+setup/teardown. Tests, replay and single bursts do not report application
+goodput. Resource graphs use monotonic wall time instead.
 
 API semantics: [process CPU time](https://developer.android.com/reference/android/os/Process#getElapsedCpuTime()),
 [process memory](https://developer.android.com/reference/android/os/Debug#getMemoryInfo(android.os.Debug.MemoryInfo)),
@@ -209,7 +310,4 @@ clock drift, interference or live-audio interruptions. A synchronous step
 exceeding 100 ms alone does not prove a worker-mode deadline failure.
 Thermal status is sampled, not a sustained throttling qualification.
 
-Next: expose existing replay/burst benchmarks as selectable workloads,
-add versioned multi-case plans and repeat/thermal-soak reports, then paced
-worker/backlog measurements. Keep fixed replay separate from adaptive
-session outcomes and processing measurements separate from goodput.
+Future work: paced worker/backlog qualification and richer thermal-soak summaries. Keep fixed replay separate from adaptive session outcomes and processing measurements separate from goodput.

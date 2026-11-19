@@ -151,6 +151,13 @@ assertion was relaxed or skipped. The cause of this timing failure has not
 been isolated; the full engine validation is **not passing**. The study's
 synchronous virtual-time outcomes do not resolve it or qualify live audio.
 
+A subsequent user-requested rerun of the unchanged engine test measured
+153 ms worker lateness against the same 150 ms limit (1,089 ms synchronous
+lateness). It again failed only this one of 73 checks. The improvement from
+195/255 ms is consistent with sensitivity to host conditions, but host load
+was not measured, so it does not establish the cause. No repeated reruns
+were used to select a passing result.
+
 Commands and retained output:
 
 ```sh
@@ -164,6 +171,7 @@ git diff --check
 
 - [Focused suite output](validation/severe-retries-2026-11-19/correctness.log).
 - [Isolated engine rerun](validation/severe-retries-2026-11-19/engine-rerun.log).
+- [User-requested subsequent rerun](validation/severe-retries-2026-11-19/engine-user-rerun.log).
 
 No Python/native parity, full-platform, Android, training, hosted CI or
 radio qualification is claimed for this Lab-only change.

@@ -1,0 +1,29 @@
+Internal ctest changing into directory: /Users/tvetter/work/Data2G/native/build-lab
+Test project /Users/tvetter/work/Data2G/native/build-lab
+    Start  1: lab
+1/5 Test  #1: lab ..............................   Passed    6.41 sec
+    Start  2: arq
+2/5 Test  #2: arq ..............................   Passed    0.19 sec
+    Start  3: arq_link
+3/5 Test  #3: arq_link .........................   Passed    1.20 sec
+    Start  8: cpm
+4/5 Test  #8: cpm ..............................   Passed    3.10 sec
+    Start 10: engine
+5/5 Test #10: engine ...........................***Failed   32.15 sec
+FAIL worker: on time: expected true
+1 of 73 checks FAILED in test_engine
+second header, 1.5 s decode in flight: 0.698 s late in sync mode, 0.195 s with the worker
+stalled decode, 2 s bound: 3.9 s dropped
+qpsk-r1/5, preview on: 1008 ms for 12.0 s of audio
+qpsk-r1/5, preview off: 926 ms for 12.0 s of audio
+fsk8r50-r1/2, preview on: 1491 ms for 17.0 s of audio
+fsk8r50-r1/2, preview off: 1450 ms for 17.0 s of audio
+
+
+80% tests passed, 1 tests failed out of 5
+
+Total Test time (real) =  43.18 sec
+
+The following tests FAILED:
+	 10 - engine (Failed)
+Errors while running CTest

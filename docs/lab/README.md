@@ -11,6 +11,7 @@ Data2G Lab is an optional testing and profiling tool for the existing Data2G C++
 - [Build and installation](build.md): local desktop/Android builds, tests and updating weights.
 - [HTML reports](html-export.md): offline exported reports and exporter validation.
 - [Validation records](validation/): source identities, completed checks and raw evidence.
+- [Severe-channel retry study](severe-session-retries.md): opt-in comparison of existing session retry modes.
 
 ## Existing infrastructure and reuse
 

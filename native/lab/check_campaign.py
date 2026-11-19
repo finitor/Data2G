@@ -1,7 +1,7 @@
 """Compare the native CPM campaign grid with the public study's actual function.
 
 Only its AST function is evaluated; no study, training, or Python modem runs.
-Usage: python native/loopback/check_campaign.py path/to/data2g-loopback
+Usage: python native/lab/check_campaign.py path/to/data2g-lab
 """
 import ast
 import json
@@ -26,7 +26,7 @@ expected = [(mode, channel, float(snr), seed) for mode in modes for channel in c
             for snr in namespace['e2e_grid'](mode, channel) for seed in [50000, 50001]]
 assert [(r['fixed_mode'], r['channel'], r['snr_db'], r['seed']) for r in rows] == expected
 assert all(r['cfo_hz'] == 4.5 and r['workload_kind'] == 'cpm_receiver_burst' for r in rows)
-for plan, count, channels in [('hf_sessions', 448, 8), ('hf_extreme', 112, 2)]:
+for plan, count, channels in [('hf_sessions', 560, 10), ('hf_extreme', 224, 4)]:
     cases = [json.loads(line) for line in subprocess.check_output([sys.argv[1], '--list-campaign', plan], text=True).splitlines()]
     assert len(cases) == count
     assert len({r['channel'] for r in cases}) == channels

@@ -14,7 +14,7 @@ struct Profile {
     std::string name;
     double delay_ms = 0, spread_hz = 0;
 };
-Profile profile(const std::string& name);  // clean, awgn, mpg, mpp, mpd, nvis, hilat
+Profile profile(const std::string& name);  // reference fading presets and ITU severe profiles; nvis/hilat aliases accepted
 
 // Fixed SplitMix64/uniform/Box-Muller algorithm, version 1. Unlike
 // std::normal_distribution it has a specified sequence across C++ libraries.

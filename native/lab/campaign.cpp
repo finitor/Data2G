@@ -21,7 +21,7 @@
 namespace data2g::lab {
 namespace {
 const std::array<std::string, 7> floor_channels{"awgn", "mpg", "mpp", "mpd", "flutter", "nvis", "hilat"};
-const std::array<std::string, 8> session_channels{"awgn", "mpg", "mpp", "mpd", "mps", "flutter", "nvis", "hilat"};
+const std::array<std::string, 10> session_channels{"awgn", "mpg", "mpp", "mpd", "mps", "flutter", "nvis-d", "lowlat-d", "hilat-m", "hilat-d"};
 std::vector<std::string> cpm_modes() {
     std::vector<std::string> out;
     for (const auto& m : arq::modes()) if (m.is_cpm()) out.emplace_back(m.name);
@@ -47,7 +47,7 @@ std::vector<CampaignCase> build_points(const std::string& name) {
     } else if (name == "hf_sessions" || name == "hf_extreme") {
         auto modes = cpm_modes(); modes.insert(modes.begin(), ""); // adaptive, then all fixed CPM grids/rates
         for (const auto& mode : modes) for (const auto& channel : session_channels) {
-            if (name == "hf_extreme" && channel != "nvis" && channel != "hilat") continue;
+            if (name == "hf_extreme" && channel != "nvis-d" && channel != "lowlat-d" && channel != "hilat-m" && channel != "hilat-d") continue;
             for (int snr = -16; snr <= 12; snr += 4) {
                 CampaignCase c;
                 c.kind = "two_endpoint_loopback";

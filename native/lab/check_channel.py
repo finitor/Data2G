@@ -1,7 +1,7 @@
 """Compare native fading to the existing Python reference with the same draws.
 
 Run with the project's Python environment:
-    python native/loopback/check_channel.py native/build-loopback/data2g-loopback
+    python native/lab/check_channel.py native/build-lab/data2g-lab
 This does not train models or change generated tables.
 """
 import json
@@ -38,7 +38,10 @@ class Random:
 
 
 def main():
-    for name, spread, delay_ms in [('mpg', .1, .5), ('mpp', 1, 2), ('mpd', 2, 4), ('mps', .15, 2), ('flutter', 10, .5), ('nvis', 1, 7), ('hilat', 30, 7)]:
+    presets = {**hfchannel.FADING_PRESETS, **hfchannel.ITU_PRESETS}
+    checks = [(name, preset.doppler_hz, preset.delay_ms) for name, preset in presets.items()]
+    checks += [('flutter', 10, .5), ('nvis', 1, 7), ('hilat', 30, 7)]
+    for name, spread, delay_ms in checks:
         horizon, seed = 10, 17
         native = json.loads(subprocess.check_output([sys.argv[1], '--channel-probe', '--channel', name,
                                                     '--horizon', str(horizon), '--seed', str(seed), '--cfo', '4.5']))

@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
             else if (flag == "--output") output = value();
             else if (flag == "--channel-probe") probe = true;
             else if (flag == "--help") {
-                std::puts("data2g-loopback [--channel clean|awgn|mpg|mpp|mpd|mps|flutter|nvis|hilat] [--snr DB]\n"
+                std::puts("data2g-lab [--channel clean|awgn|mpg|mpp|mpd|mps|flutter|nvis-d|lowlat-d|hilat-m|hilat-d] [--snr DB]\n"
                           "  [--seed N] [--bytes N] [--horizon SECONDS] [--cfo HZ] [--cap 0|1|2]\n"
                           "  [--threads N (0=auto)] [--fixed-mode MODE] [--cpm-burst] [--paced] [--record-dir NEW_DIR] [--output FILE]\n"
                           "  --list-campaign cpm_floor|hf_sessions|hf_extreme [--trials N]: case plan as JSONL\n"
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
         std::cout << result << '\n';
         return result.find("\"outcome\":\"complete\"") != std::string::npos || result.find("\"outcome\":\"measured\"") != std::string::npos ? 0 : 1;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "data2g-loopback: %s\n", e.what());
+        std::fprintf(stderr, "data2g-lab: %s\n", e.what());
         return 2;
     }
 }

@@ -19,8 +19,10 @@ Profile profile(const std::string& name) {
     if (name == "mps") return {name, 2, .15};  // empirical slow/selective profile, not an ITU preset
     if (name == "mpd") return {name, 4, 2};
     if (name == "flutter") return {name, .5, 10};
-    if (name == "nvis") return {name, 7, 1};
-    if (name == "hilat") return {name, 7, 30};
+    if (name == "nvis" || name == "nvis-d") return {name, 7, 1};
+    if (name == "lowlat-d") return {name, 6, 10};
+    if (name == "hilat-m") return {name, 3, 10};
+    if (name == "hilat" || name == "hilat-d") return {name, 7, 30};
     throw std::invalid_argument("unknown channel profile: " + name);
 }
 

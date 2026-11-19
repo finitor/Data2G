@@ -41,7 +41,7 @@ public final class MainActivity extends Activity {
     private native String nativeRun(String kind, String channel, String fixedMode, double snr, long seed,
                                   int bytes, int horizon, int threads, boolean paced, double cfo);
     private static final AtomicBoolean ENGINE_ACTIVE = new AtomicBoolean();
-    private final String[] channels = {"clean", "awgn", "mpg", "mpp", "mpd", "mps", "flutter", "nvis", "hilat"};
+    private final String[] channels = {"clean", "awgn", "mpg", "mpp", "mpd", "mps", "flutter", "nvis-d", "lowlat-d", "hilat-m", "hilat-d"};
     private final String[] workloads = {"custom", "quick", "hf_sessions", "hf_extreme", "cpm_floor", "native_all", "native_one", "listen", "replay", "burst"};
     private final String[] workloadNames = {"Selected loopback case", "Quick loopback suite", "Full HF session matrix", "Extreme HF session matrix", "Full CPM receiver campaign", "All 26 native suites", "Selected native suite", "Single receiver listening benchmark", "Single endpoint recording replay", "Recorded burst benchmark"};
     private Spinner workload, channel, mode, fixedMode, nativeSuite;
@@ -100,7 +100,7 @@ public final class MainActivity extends Activity {
         automatic.setOnCheckedChangeListener((v, checked) -> threads.setEnabled(!checked));
         label(form, "Some original suites intentionally change their own pool size. FFT threads are managed separately by the core.", 14);
         repeats = field(form, "Seeds per HF grid point / repetitions (1–1000)", "1", false);
-        label(form, "HF sessions: adaptive + six fixed CPM modes, 8 SNR points, 8 channels. Extreme: NVIS and high latitude. CPM: all 558 public grid points; 100 seeds gives 55,800 cases. Paired normal receiver and supplied timing/CFO/header diagnostic; other Python research arms are excluded.", 14);
+        label(form, "HF sessions: adaptive + six fixed CPM modes, 8 SNR points, 10 channels. Extreme: all four severe ITU presets. CPM: all 558 public grid points; 100 seeds gives 55,800 cases. Paired normal receiver and supplied timing/CFO/header diagnostic; other Python research arms are excluded.", 14);
         firstCase = field(form, "First case index (0 = beginning)", "0", false);
         caseLimit = field(form, "Case limit (0 = all remaining cases)", "0", false);
         profiling = new CheckBox(this); profiling.setText("Record CPU, memory and thermal timelines"); profiling.setChecked(true); form.addView(profiling);
@@ -130,7 +130,10 @@ public final class MainActivity extends Activity {
         if ("console".equals(intent.getStringExtra("page"))) consolePage();
         if (intent.getBooleanExtra("auto", false)) {
             select(workload, workloads, intent.getStringExtra("workload")); if (intent.getBooleanExtra("suite", false)) workload.setSelection(1);
-            select(channel, channels, intent.getStringExtra("channel"));
+            String selectedChannel = intent.getStringExtra("channel");
+            if ("nvis".equals(selectedChannel)) selectedChannel = "nvis-d";
+            if ("hilat".equals(selectedChannel)) selectedChannel = "hilat-d";
+            select(channel, channels, selectedChannel);
             snr.setText(intent.getStringExtra("snr") == null ? "12" : intent.getStringExtra("snr"));
             seed.setText(String.valueOf(intent.getLongExtra("seed", 1))); bytes.setText(String.valueOf(intent.getIntExtra("bytes", 64)));
             horizon.setText(String.valueOf(intent.getIntExtra("horizon", 180))); repeats.setText(String.valueOf(intent.getIntExtra("repeats", 1)));
@@ -180,8 +183,10 @@ public final class MainActivity extends Activity {
         case "mpd": return "MPD · 4 ms / 2 Hz Doppler";
         case "mps": return "MPS (empirical) · 2 ms / 0.15 Hz Doppler";
         case "flutter": return "Flutter · 0.5 ms / 10 Hz Doppler";
-        case "nvis": return "NVIS · 7 ms / 1 Hz Doppler";
-        case "hilat": return "High latitude · 7 ms / 30 Hz Doppler";
+        case "nvis-d": case "nvis": return "NVIS · 7 ms / 1 Hz Doppler";
+        case "lowlat-d": return "Low latitude disturbed · 6 ms / 10 Hz Doppler";
+        case "hilat-m": return "High latitude moderate · 3 ms / 10 Hz Doppler";
+        case "hilat-d": case "hilat": return "High latitude · 7 ms / 30 Hz Doppler";
         default: return name;
         }
     }

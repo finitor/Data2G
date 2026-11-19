@@ -22,7 +22,7 @@ def main():
     ap.add_argument('--serial', required=True)
     ap.add_argument('--sdk', type=Path, default=Path.home() / 'Library/Android/sdk')
     ap.add_argument('--java-home', type=Path, required=True)
-    ap.add_argument('--output', type=Path, default=ROOT / 'native/build-loopback/html-export-check')
+    ap.add_argument('--output', type=Path, default=ROOT / 'native/build-lab/html-export-check')
     args = ap.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -40,13 +40,13 @@ def main():
         run([adb, '-s', args.serial, 'shell', shlex.join([str(v) for v in command])])
 
     package = Path('org/cleverdomain/data2g/lab')
-    source = ROOT / 'native/android-loopback'
+    source = ROOT / 'native/android-lab'
     with tempfile.TemporaryDirectory(prefix='data2g-html-check-', dir=args.output) as scratch:
         scratch = Path(scratch)
         classes, dex, fixture = [scratch / n for n in ['classes', 'dex', 'fixture']]
         for folder in [classes, dex, fixture]:
             folder.mkdir()
-        report = json.loads((ROOT / 'docs/loopback-lab/redmi-10c-lab3-native-final-2026-11-18.json').read_text())
+        report = json.loads((ROOT / 'docs/lab/validation/redmi-10c-lab3-native-final-2026-11-18.json').read_text())
         profile = report.pop('profiling')
         (fixture / report['profiling_file']).write_text(json.dumps(profile))
         rows = []

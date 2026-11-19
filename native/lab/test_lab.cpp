@@ -31,7 +31,7 @@ int main() {
         meter.add(41, {100, 50, 100, 50});
         require(meter.bps()[0] == 0 && meter.bps()[2] > 0, "30-second window expires delivery independently of later ACKs");
         require(campaign_size("cpm_floor", 100) == 55800, "full six-mode seven-channel floor grid and all seeds");
-        require(campaign_size("hf_extreme", 32) == 3584, "extreme channels, adaptive and six fixed modes, eight SNRs");
+        require(campaign_size("hf_extreme", 32) == 7168, "all four severe ITU channels, adaptive and six fixed modes, eight SNRs");
         Options probe;
         probe.channel = "awgn"; probe.fixed_mode = "fsk8r50-r1/3"; probe.snr_db = 30;
         const std::atomic_bool probe_go{false};
@@ -56,14 +56,25 @@ int main() {
         std::atomic_bool cancelled{true};
         require(run(o, cancelled).find("\"outcome\":\"cancelled\"") != std::string::npos, "cancelled never reported complete");
         const std::atomic_bool go{false};
+        std::string clean_result;
         for (const char* name : {"clean", "awgn"}) {
             o.channel = name;
             o.snr_db = 20;
             const auto result = run(o, go);
             std::puts(result.c_str());
             require(result.find("\"outcome\":\"complete\"") != std::string::npos, "connect, exact bidirectional bytes, final ACK, disconnect");
+            if (o.channel == "clean") clean_result = result;
         }
-        o.horizon_s = 8;
+        auto field = [&](const std::string& name) {
+            const std::string label = "\"" + name + "\":";
+            const auto pos = clean_result.find(label);
+            require(pos != std::string::npos, "reference session records delivery and ACK times");
+            return std::stod(clean_result.substr(pos + label.size()));
+        };
+        const double delivery = field("delivery_s"), ack = field("ack_s");
+        require(delivery >= 0 && ack > delivery, "final ACK follows application delivery");
+        o.channel = "clean";
+        o.horizon_s = (delivery + ack) * .5;
         const auto late_ack = run(o, go);
         require(late_ack.find("\"delivered\":true") != std::string::npos
                 && late_ack.find("\"acknowledged\":false") != std::string::npos,

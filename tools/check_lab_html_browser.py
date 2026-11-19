@@ -68,7 +68,7 @@ def main():
     ap.add_argument('fixture', type=Path)
     ap.add_argument('--mobile', action='store_true')
     ap.add_argument('--chrome', type=Path, default=Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'))
-    ap.add_argument('--output', type=Path, default=ROOT / 'native/build-loopback/html-browser')
+    ap.add_argument('--output', type=Path, default=ROOT / 'native/build-lab/html-browser')
     args = ap.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     for name, archive, count, fixture in [('real', args.real, 26, False), ('fixture', args.fixture, 125, True)]:

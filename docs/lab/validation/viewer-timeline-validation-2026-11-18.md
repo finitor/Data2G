@@ -1,8 +1,6 @@
 # Viewer and timeline validation — 18 November 2026
 
-APK build 2 (`0.5.1-lab2`), installed on the Redmi 10C through Files.
-Source identity: `72ca439a064a7414ab8c8b4d0d045fe217be91be+da0f08ccd785b203`.
-APK SHA-256: `0735fff1b16aae0595ed6e77d56cc8f781e87d9a39d5e2cefc1fba67eb5b9552`.
+APK build 2 (`0.5.1-lab2`), installed on the Redmi 10C through Files. Source identity: `72ca439a064a7414ab8c8b4d0d045fe217be91be+da0f08ccd785b203`. APK SHA-256: `0735fff1b16aae0595ed6e77d56cc8f781e87d9a39d5e2cefc1fba67eb5b9552`.
 
 - Local macOS ARM64 native tests passed, including minimum wall-clock pacing and cancellation during paced waiting.
 - The Android quick suite completed clean, AWGN and MPP exchanges, with exact 64-byte messages each way, final acknowledgements and disconnects.

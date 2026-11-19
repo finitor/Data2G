@@ -1,0 +1,14 @@
+{
+  "platform": "macOS-15.8.3-arm64-arm-64bit",
+  "python": "3.12.15",
+  "packages": {
+    "numpy": "2.5.5",
+    "scipy": "1.18.1",
+    "pytest": "9.2.0",
+    "pybind11": "3.1.0"
+  },
+  "torch_installed": false,
+  "build": "RelWithDebInfo; AppleClang 17; macOS ARM64; Unix Makefiles; --parallel 2",
+  "native_abi": 9,
+  "validation_worktree": "/private/tmp/data2g-disc-reply-timer-20261119"
+}

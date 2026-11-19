@@ -1,0 +1,12 @@
+{
+  "trials": 60,
+  "pairs": 30,
+  "all_shipped_policy": true,
+  "pairs_with_matching_pre_disc_metrics": 30,
+  "pairs_reaching_disc": 29,
+  "matching_prefixes_when_reached": 29,
+  "before_pairs_with_ack_overlap": 11,
+  "after_pairs_with_ack_overlap": 0,
+  "natural_confirmed_before": 15,
+  "natural_confirmed_after": 16
+}

@@ -15,6 +15,7 @@ Data2G Lab is an optional testing and profiling tool for the existing Data2G C++
 - [Controlled session losses](controlled-session-loss.md): deterministic loss targets, signal semantics and accounting.
 - [Conditional retry study](conditional-retry-study.md): actual retry exposure and recovery tradeoffs after forced losses.
 - [Natural-loss weak-channel validation](natural-weak-retry-study.md): later-retry frequency and all-attempt connection, delivery and closure effects.
+- [DISC reply-timer investigation](disc-reply-timer.md): isolated timer correction, missed-ACK recovery and unanswered-disconnect cost.
 
 ## Existing infrastructure and reuse
 
@@ -27,7 +28,7 @@ Data2G Lab is an optional testing and profiling tool for the existing Data2G C++
 | `scripts/cpu_profile/run.sh` | Live two-host/PipeWire profiling on Linux |
 | `scripts/phy_session.py`, `data2g/hfchannel.py` | Reference session studies and Gaussian-scatter model |
 
-The new parts are the native scenario driver, resource measurements, structured results and Android packaging/UI. Production DSP, generated tables and host behavior are unchanged. The common build gains an opt-out for Android device backends, defaulting to enabled.
+The new parts are the native scenario driver, resource measurements, structured results and Android packaging/UI. The Lab harness preserves production DSP, generated tables and host interfaces; the DISC reply-timer study separately imports the isolated session-timer correction documented above. The common build gains an opt-out for Android device backends, defaulting to enabled.
 
 For hardware comparisons, generated sessions explore adaptive behavior; fixed recordings with `data2g-replay` compare identical receive workloads. Keep `data2g-bench-rx` for detailed stage measurements. Do not infer one modem's requirements from two modems plus a simulator.
 

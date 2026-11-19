@@ -1,0 +1,162 @@
+[
+  {
+    "scenario": "natural",
+    "channel": "clean",
+    "snr_db": 30,
+    "pairs": 2,
+    "prefix_matches": 2,
+    "full_trace_matches": 2,
+    "arms": {
+      "before": {
+        "confirmed_complete": 2,
+        "plans_applied": 2,
+        "pairs_with_overlap": 0
+      },
+      "after": {
+        "confirmed_complete": 2,
+        "plans_applied": 2,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "natural",
+    "channel": "awgn",
+    "snr_db": -12,
+    "pairs": 4,
+    "prefix_matches": 4,
+    "full_trace_matches": 0,
+    "arms": {
+      "before": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      },
+      "after": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "natural",
+    "channel": "mpp",
+    "snr_db": -8,
+    "pairs": 4,
+    "prefix_matches": 4,
+    "full_trace_matches": 1,
+    "arms": {
+      "before": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      },
+      "after": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "natural",
+    "channel": "awgn",
+    "snr_db": -14,
+    "pairs": 8,
+    "prefix_matches": 7,
+    "full_trace_matches": 1,
+    "arms": {
+      "before": {
+        "confirmed_complete": 5,
+        "plans_applied": 8,
+        "pairs_with_overlap": 1
+      },
+      "after": {
+        "confirmed_complete": 6,
+        "plans_applied": 8,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "mixed",
+    "channel": "awgn",
+    "snr_db": -12,
+    "pairs": 4,
+    "prefix_matches": 4,
+    "full_trace_matches": 0,
+    "arms": {
+      "before": {
+        "confirmed_complete": 0,
+        "plans_applied": 4,
+        "pairs_with_overlap": 4
+      },
+      "after": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "mixed",
+    "channel": "mpp",
+    "snr_db": -8,
+    "pairs": 4,
+    "prefix_matches": 4,
+    "full_trace_matches": 0,
+    "arms": {
+      "before": {
+        "confirmed_complete": 0,
+        "plans_applied": 4,
+        "pairs_with_overlap": 4
+      },
+      "after": {
+        "confirmed_complete": 4,
+        "plans_applied": 4,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "disc",
+    "channel": "awgn",
+    "snr_db": -12,
+    "pairs": 2,
+    "prefix_matches": 2,
+    "full_trace_matches": 0,
+    "arms": {
+      "before": {
+        "confirmed_complete": 2,
+        "plans_applied": 2,
+        "pairs_with_overlap": 0
+      },
+      "after": {
+        "confirmed_complete": 2,
+        "plans_applied": 2,
+        "pairs_with_overlap": 0
+      }
+    }
+  },
+  {
+    "scenario": "disc_ack",
+    "channel": "awgn",
+    "snr_db": -12,
+    "pairs": 2,
+    "prefix_matches": 2,
+    "full_trace_matches": 0,
+    "arms": {
+      "before": {
+        "confirmed_complete": 0,
+        "plans_applied": 0,
+        "pairs_with_overlap": 2
+      },
+      "after": {
+        "confirmed_complete": 0,
+        "plans_applied": 2,
+        "pairs_with_overlap": 0
+      }
+    }
+  }
+]

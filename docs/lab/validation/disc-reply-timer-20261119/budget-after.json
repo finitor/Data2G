@@ -1,0 +1,25 @@
+{
+  "session_source_sha256": "45bbc9e81e2c636f32dc828d09026e2c636a7c1acee5f6c8d89a662d71bcc894",
+  "t_turn_s": 1.0,
+  "attempts": [
+    {
+      "mode": "qpsk-r1/5",
+      "start_s": 0.0,
+      "end_s": 1.624,
+      "deadline_s": 6.748000000000001
+    },
+    {
+      "mode": "fsk16r25-r1/2",
+      "start_s": 6.748000000000001,
+      "end_s": 11.728000000000002,
+      "deadline_s": 20.208000000000002
+    },
+    {
+      "mode": "fsk16r25-r1/2",
+      "start_s": 20.208000000000002,
+      "end_s": 25.188000000000002,
+      "deadline_s": 33.668
+    }
+  ],
+  "exhausted_s": 33.668
+}

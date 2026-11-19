@@ -1,0 +1,15 @@
+{
+  "platform": "macOS-15.8.3-arm64-arm-64bit",
+  "binary_sha256": {
+    "before": "99427baa584d2e827dcdac5855fe1803cc174e2c19dae5053e4fdfb975d102c6",
+    "after": "2b6c9646d5a6631691aa6477d740eab35bd067d3a68269b83884eac41e3778aa"
+  },
+  "script_sha256": "44d2b0f8119b6191c430ecbe11f662cbb1d1a9857cea55d7709ecd2ba71c8ef9",
+  "limits": [
+    "64 random bytes each way; 180-second virtual-time horizon",
+    "unit active mean power; SNR in 2500 Hz, not PEP matched",
+    "Gaussian noise/fading; no impulsive atmospheric noise or RF hardware",
+    "production DD wall-time budget; sequential unpaced engines",
+    "matching seeds, not identical received audio after schedules diverge"
+  ]
+}

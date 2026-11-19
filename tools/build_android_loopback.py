@@ -65,6 +65,7 @@ def main():
     run([bt / 'd8', '--min-api', '29', '--lib', android, '--output', dex, *sorted(classes.rglob('*.class'))], env)
     assets = build / 'assets'
     assets.mkdir(exist_ok=True)
+    shutil.copytree(source / 'assets', assets, dirs_exist_ok=True)
     programs = sorted((build / 'programs').glob('liblab_*.so'))
     available = {p.name[len('liblab_'):-3] for p in programs}
     suites = []
@@ -76,7 +77,7 @@ def main():
     (assets / 'native-suites.json').write_text(json.dumps(dict(schema=1, suites=suites), indent=2))
     base = build / 'base.apk'
     run([bt / 'aapt2', 'link', '-I', android, '--manifest', source / 'AndroidManifest.xml',
-         '--version-code', '3', '--version-name', '0.5.1-lab3', '-A', assets, '-o', base], env)
+         '--version-code', '4', '--version-name', '0.5.1-lab4', '-A', assets, '-o', base], env)
     with zipfile.ZipFile(base, 'a') as archive:
         archive.write(dex / 'classes.dex', 'classes.dex')
         # Keep symbols beside the build for profiling; strip only APK copies.

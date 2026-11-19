@@ -115,6 +115,9 @@ adb -s SERIAL shell cat /sdcard/Android/data/org.cleverdomain.data2g.lab/files/l
 adb -s SERIAL pull /sdcard/Android/data/org.cleverdomain.data2g.lab/files/campaign-TIMESTAMP
 ```
 
+For offline HTML export validation without an APK install, see
+[the HTML report checks](loopback-lab/html-export.md#local-validation).
+
 ## Replacing the native weights later
 
 Update deliberately selected upstream source/generated model files in this

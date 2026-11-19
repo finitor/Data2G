@@ -196,7 +196,11 @@ cases** pages through the full index. Schema 3 stores a `campaign-TIMESTAMP/`
 directory containing `manifest.json`, append-only `index.jsonl`, individual
 case/attempt JSON files, original program logs, retained input recordings,
 and resource segments. Export saves the complete directory as ZIP without
-loading all trials into memory. Imported ZIPs are read without extraction.
+loading all trials into memory. Each ZIP includes a self-contained
+**report.html** with graphs and all case summaries, including when an older
+imported ZIP is re-exported. Extract the ZIP and open the HTML in a browser.
+See [offline HTML reports](loopback-lab/html-export.md) for details and local
+validation. Imported ZIPs are read without extraction.
 
 **Resume this campaign** recovers the index, preserves prior attempts and
 retries a cancelled case. A new profiling segment starts at wall time zero;

@@ -4,13 +4,11 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import android.os.SystemClock;
 
@@ -123,17 +121,7 @@ final class RunStore {
         try (BufferedReader in = new BufferedReader(new FileReader(file))) { String line; while ((line = in.readLine()) != null) out.append(line).append('\n'); }
         return out.toString();
     }
-    void export(ZipOutputStream zip) throws Exception { zipDirectory(zip, directory, ""); }
-    private static void zipDirectory(ZipOutputStream zip, File dir, String prefix) throws Exception {
-        File[] files = dir.listFiles(); if (files == null) return;
-        byte[] buffer = new byte[32768];
-        for (File file : files) {
-            if (file.isDirectory()) zipDirectory(zip, file, prefix + file.getName() + "/");
-            else if (!file.getName().endsWith(".tmp")) {
-                zip.putNextEntry(new ZipEntry(prefix + file.getName()));
-                try (FileInputStream in = new FileInputStream(file)) { int n; while ((n = in.read(buffer)) >= 0) zip.write(buffer, 0, n); }
-                zip.closeEntry();
-            }
-        }
+    void export(ZipOutputStream zip, java.io.InputStream template) throws Exception {
+        HtmlReport.exportDirectory(directory, snapshot(), template, zip);
     }
 }

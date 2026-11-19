@@ -65,7 +65,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         LinearLayout root = column();
-        label(root, "Data2G Android Lab · 3", 24);
+        label(root, "Data2G Android Lab · 4", 24);
         LinearLayout nav = new LinearLayout(this); root.addView(nav);
         button(nav, "Run", v -> page(false)); button(nav, "Results & graphs", v -> page(true)); button(nav, "Console", v -> consolePage());
         status = label(root, "Ready. Leaving the app cancels a running case; campaigns can resume.", 14);
@@ -296,8 +296,8 @@ public final class MainActivity extends Activity {
                 if (request == 1) {
                     try (OutputStream out = getContentResolver().openOutputStream(data.getData())) {
                         if (out == null) throw new IOException("Cannot open export");
-                        if (local != null) try (ZipOutputStream zip = new ZipOutputStream(out)) { new RunStore(local).export(zip); }
-                        else if (archive != null) try (InputStream in = new FileInputStream(archive)) { copy(in, out, Long.MAX_VALUE); }
+                        if (local != null) try (ZipOutputStream zip = new ZipOutputStream(out); InputStream template = getAssets().open("report.html")) { new RunStore(local).export(zip, template); }
+                        else if (archive != null) try (ZipOutputStream zip = new ZipOutputStream(out); InputStream template = getAssets().open("report.html")) { HtmlReport.exportZip(archive, template, zip); }
                         else out.write(reportText.getBytes(StandardCharsets.UTF_8));
                     }
                     runOnUiThread(() -> status.setText("Exported."));

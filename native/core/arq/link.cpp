@@ -1056,6 +1056,33 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
             if (has) ways.push_back(std::move(w));
         }
         for (auto& w : reply_changes(base)) ways.push_back(std::move(w));
+        if (!data && peer_ctl_.empty()) {
+            // Before any peer control was read, also try the session's initial
+            // announcements with build()'s padding/replace rule. Keep the old ways.
+            std::vector<Way> announced;
+            const int n_ctl = ctl_slots ? 1 : n_cw;
+            const int room = n_ctl * cpb;
+            for (const auto& w : ways) {
+                Way a = w;
+                auto size = [&] {
+                    int n = 4;
+                    for (const auto& t : a.ext) n += 2 + static_cast<int>(t.value.size());
+                    return n;
+                };
+                if (nod_default() && nod && size() + 2 <= room) a.ext.push_back({T_NODS, {}, {}});
+                if (keep_default() && keep) {
+                    if (size() + 2 <= room) {
+                        a.ext.push_back({T_KEEP, {}, {}});
+                    } else if (n_ctl < max_ctl && std::any_of(a.ext.begin(), a.ext.end(),
+                               [](const Tlv& t) { return t.type == T_REPLY; })) {
+                        std::erase_if(a.ext, [](const Tlv& t) { return t.type == T_REPLY; });
+                        a.ext.push_back({T_KEEP, {}, {}});
+                    }
+                }
+                if (a.ext != w.ext) announced.push_back(std::move(a));
+            }
+            ways.insert(ways.begin(), announced.begin(), announced.end());
+        }
         for (const auto& w : ways) {
             // an OFDM control-only burst is its control: n_cw codewords, the last ones maybe all padding
             auto h = pack_hypothesis(w, cpb, max_ctl, pair, (ctl_slots || data) ? 0 : n_cw);

@@ -18,6 +18,7 @@ from data2g import codes, cpm
 from data2g.arq import frames as F
 from data2g.arq import link as L
 from data2g.arq import phy as PHY
+from data2g.arq import modes as M
 from data2g.arq.burst import Slot, TxBurst, ctl_mask
 
 from test_arq import FakeRx, RandomPolicy, payload
@@ -52,6 +53,66 @@ class PrimeRx(FakeRx):
             self.stats["forged"] += 1
             return bytes(t & m | self.rng.randrange(256) & ~m & 255 for t, m in zip(template, tmask))
         return None
+
+
+class BootstrapPolicy(L.Policy):
+    """Real control capacities and fixed advice, independent of the outcome model."""
+
+    def __init__(self, mode, dup):
+        self.mode, self.want_dup = mode, dup
+
+    def choose(self, station, escalation):
+        return self.mode, 1 if M.is_cpm(M.MODES[self.mode]) else 2
+
+    def payload_bytes(self, mode):
+        return codes.payload_bytes(M.MODES[mode])
+
+    def ctl_payload_bytes(self, mode):
+        spec = M.MODES[mode]
+        return codes.payload_bytes(cpm.CTL[spec.grid] if M.is_cpm(spec) else spec)
+
+    def max_ctl(self, mode):
+        return M.max_ctl(M.MODES[mode])
+
+    def rv_cycle(self, mode):
+        return codes.rv_cycle(M.MODES[mode])
+
+    def recommend(self, station):
+        rec = M.encode("fsk16r25-r1/2")
+        return rec, 1, rec
+
+
+def bootstrap_control(cls, mode, dup, announcements, direction):
+    sender = cls(direction, BootstrapPolicy(mode, dup), master=direction == 0,
+                 nod=announcements, keep=announcements)
+    receiver = cls(1 - direction, BootstrapPolicy(mode, dup), master=direction == 1, nod=True, keep=True)
+    burst = sender.build()
+    stats = dict(mismatch=0, primed=0, primed_ok=0, forged=0)
+    rx = PrimeRx(burst, random.Random(1), 0, {}, stats, p_ctl=1, p_known=1)
+    rx.n_ctl_slots = 1 if M.is_cpm(M.MODES[mode]) else 0
+    hypotheses = receiver.expect(rx)
+    assert len(hypotheses) <= L.PRIME_TRIES
+    assert receiver.handle(rx), (mode, dup, announcements, direction, hypotheses)
+    assert receiver.stats["rx_primed"] == 1
+    return _burst(burst), hypotheses
+
+
+@pytest.mark.parametrize("mode", ["ack-4f", "fsk16r25-r1/2"])
+@pytest.mark.parametrize("dup", [False, True])
+@pytest.mark.parametrize("announcements", [False, True])
+@pytest.mark.parametrize("direction", [0, 1])
+def test_first_control_can_be_primed(mode, dup, announcements, direction):
+    """A first control is recovered after blind failure, with default or legacy announcements."""
+    bootstrap_control(L.Station, mode, dup, announcements, direction)
+
+
+@pytest.mark.parametrize("mode", ["ack-4f", "fsk16r25-r1/2"])
+@pytest.mark.parametrize("dup", [False, True])
+@pytest.mark.parametrize("announcements", [False, True])
+@pytest.mark.parametrize("direction", [0, 1])
+def test_cpp_first_control_primes_identically(native, pure, mode, dup, announcements, direction):
+    assert bootstrap_control(native.arq.Station, mode, dup, announcements, direction) == \
+        bootstrap_control(L.Station, mode, dup, announcements, direction)
 
 
 def lockstep(seed, cls_a, cls_b, p_burst, p_ctl, n_a, n_b, forge=0.0, modes=("m4", "m22", "m46"), max_cw=20,

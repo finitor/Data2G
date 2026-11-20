@@ -1278,6 +1278,25 @@ class Station:
                     + [(c, [(t, v, b"\xc0") if t == F.T_REPLY and v else (t, v, m) for t, v, m in e]) for c, e in base
                        if any(t == F.T_REPLY and v for t, v, _ in e)]
                     + self._reply_changes(base))
+            if not data and not self._peer_ctl:
+                # Before a peer control was read, also try the session's initial
+                # capability announcements, with build()'s padding/replace rule.
+                # Keep the original ways for peers that do not announce them.
+                announced = []
+                room = (1 if ctl_slots else rx.n_cw) * cpb
+                for c, e in ways:
+                    a = list(e)
+                    size = lambda: 4 + sum(2 + len(v) for _, v, _ in a)
+                    if NOD and self.nod and size() + 2 <= room:
+                        a.append((F.T_NODS, b"", b""))
+                    if KEEP and self.keep:
+                        if size() + 2 <= room:
+                            a.append((F.T_KEEP, b"", b""))
+                        elif any(t == F.T_REPLY for t, _, _ in a) and (1 if ctl_slots else rx.n_cw) < max_ctl:
+                            a = [t for t in a if t[0] != F.T_REPLY] + [(F.T_KEEP, b"", b"")]
+                    if a != e:
+                        announced.append((c, a))
+                ways = announced + ways
             for core, ext in ways:
                 # an OFDM control-only burst is its control: n_cw codewords, the
                 # last ones maybe all padding (build reserves room for data it may not send)

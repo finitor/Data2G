@@ -310,6 +310,9 @@ public:
     // bursts that acted on one that did
     bool peer_said_keep_ = false;
     Told keep_seen_;
+    // the peer's T_NODS likewise: its latest burst carried it; my bursts that acted on one that did
+    bool peer_said_nods_ = false;
+    Told nods_seen_;
     // ... and the peer reads my controls so (reply_held): its latest burst acted on a T_KEEP burst of mine;
     // my bursts that acted on such a burst
     bool peer_acked_keep_ = false;

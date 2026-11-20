@@ -493,3 +493,68 @@ def test_policy_hears_primed_controls_as_lost():
         b.answered()
         a.answered()
     assert b.policy.seen == [True, False, True, False, True, False] and b.stats["rx_primed"] == 3
+
+
+class PollPolicy(RandomPolicy):
+    """One CPM-like mode, its control alone unless data waits; a fixed reply recommendation."""
+
+    want_dup = False
+    reply = 5
+
+    def __init__(self):
+        super().__init__(random.Random(0), 0.0, ("c60",))
+
+    def choose(self, station, escalation):
+        return "c60", 3 if station.tx.pending() else 1
+
+    def recommend(self, station):
+        return 5, 1, self.reply
+
+
+def poll_after_data(cls, reply_changes):
+    """A caller's poll after a data exchange whose reply was lost, its control lost blind:
+    -> (burst, hypotheses, whether a primed retry read it). The caller said T_NODS and
+    T_KEEP in its first poll and stopped once the callee had acted on them."""
+    a = cls(0, PollPolicy(), master=True, nod=True, keep=True)
+    b = cls(1, PollPolicy(), nod=True, keep=True)
+
+    def rx(burst, lost=False):
+        stats = dict(mismatch=0, primed=0, primed_ok=0, forged=0)
+        r = PrimeRx(burst, random.Random(1), 0, {}, stats, p_ctl=int(lost), p_known=1)
+        r.n_ctl_slots = 1
+        return r
+
+    a.build()  # the first burst: lost
+    first = a.on_timeout(allow_repeat=False)
+    assert F.T_NODS in F.Control.unpack([first.slots[0].payload]).ext
+    assert b.handle(rx(first))
+    reply = b.build()
+    b.answered()
+    assert a.handle(rx(reply))
+    a.write(bytes(range(64)))
+    data = a.build()
+    assert len(data.slots) > 1 and b.handle(rx(data))
+    b.build()  # its reply: lost
+    b.answered()
+    if reply_changes:
+        a.policy.reply = 6
+    poll = a.on_timeout(allow_repeat=False)
+    ext = F.Control.unpack([poll.slots[0].payload]).ext
+    assert len(poll.slots) == 1 and F.T_NODS not in ext and F.T_KEEP not in ext
+    r = rx(poll, True)
+    hs = b.expect(r)
+    assert len(hs) <= L.PRIME_TRIES
+    return _burst(poll), hs, bool(b.handle(r))
+
+
+@pytest.mark.parametrize("reply_changes", [False, True])
+def test_poll_after_data_can_be_primed(reply_changes):
+    """The callee knows the caller's T_NODS has stopped (the caller acted on the burst that
+    acted on it), though the caller's last control-only burst, its first poll, carried it."""
+    _, hs, read = poll_after_data(L.Station, reply_changes)
+    assert read, hs
+
+
+@pytest.mark.parametrize("reply_changes", [False, True])
+def test_cpp_poll_after_data_primes_identically(native, pure, reply_changes):
+    assert poll_after_data(native.arq.Station, reply_changes) == poll_after_data(L.Station, reply_changes)

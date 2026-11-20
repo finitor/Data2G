@@ -5,14 +5,15 @@ to `arodland/Data2G`. It is not the home for a separate experimental modem.
 
 ## Current user-directed state
 
-- Testing is paused pending upstream retraining. Do not run modem tests,
-  builds, benchmarks, profiling or training until the user explicitly resumes
-  that work. Repository setup, documentation and read-only Git/format checks
-  may continue. Do not infer a resume from a sync or setup request.
+- On 2026-11-20 the user resumed release-source builds and local tests on
+  this macOS ARM64 host, superseding the 2026-11-18 retraining pause for
+  that work. Benchmarks, profiling, training and dependent implementation
+  studies remain paused until explicitly requested. A sync or setup request
+  alone does not authorize further testing or studies.
 - Keep repository GitHub Actions disabled, including manual hosted runs.
   Do not enable, dispatch or rerun hosted workflows without a policy change
   from the user. This applies even though this fork is public.
-- When testing resumes, use local macOS ARM64 validation. Other platform
+- Use local macOS ARM64 validation. Other platform
   builds remain suspended until requested. Do not change billing settings.
 
 ## Repository boundaries and workflow
@@ -46,7 +47,7 @@ to `arodland/Data2G`. It is not the home for a separate experimental modem.
 - Share minimal standalone fixtures and reproduction commands that work on
   upstream without access to another repository. Retain seeds, source/module
   revisions, environment, raw paired outcomes and relevant limitations.
-- After the pause is lifted, run correctness checks appropriate to every code
+- For authorized work, run correctness checks appropriate to every code
   change. Separate correctness from performance claims; measure processing
   cost when needed for a DSP decision, not automatically for every change.
   Distinguish CPU time, decoder latency and application/channel goodput.

@@ -1,7 +1,7 @@
 // The rig settings, as QML sees them: SSTVAE's rig screen (its
 // android-app/rigcontrol.hpp) over Data2G's saved settings (app::Args'
-// rig fields), with no connection of its own: the modem opens the rig when it
-// starts, as data2g-host does. Saved at once, used at the next start.
+// rig fields). The optional shared radio service has its own lifetime;
+// saved radio settings take effect on reconnect.
 //
 // Three ways to reach a radio, as in SSTVAE:
 //   usb        a serial adapter or the radio's own USB port (usb-serial-for-android);
@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QObject>
+#include <QTimer>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -23,6 +24,11 @@ class RigSettings : public QObject {
     // How the transmitter is keyed, which decides what else is needed: vox (nothing:
     // no rig opened), cat (a connection and a radio model), dtr or rts (a USB serial
     // device; the radio model is optional, None by default).
+    Q_PROPERTY(bool serverLan READ serverLan WRITE setServerLan NOTIFY changed)
+    Q_PROPERTY(int serverPort READ serverPort WRITE setServerPort NOTIFY changed)
+    Q_PROPERTY(bool modemStopped READ modemStopped NOTIFY changed)
+    Q_PROPERTY(bool facade READ facade WRITE setFacade NOTIFY changed)
+    Q_PROPERTY(QString facadeStatus READ facadeStatus NOTIFY changed)
     Q_PROPERTY(QString keying READ keying WRITE setKeying NOTIFY changed)
     Q_PROPERTY(QString connection READ connection WRITE setConnection NOTIFY changed)
     Q_PROPERTY(int model READ model WRITE setModel NOTIFY changed)
@@ -45,6 +51,15 @@ public:
     explicit RigSettings(QObject* parent = nullptr);
     ~RigSettings() override;
 
+    bool facade() const;
+    bool serverLan() const;
+    void setServerLan(bool lan);
+    int serverPort() const;
+    void setServerPort(int port);
+    bool modemStopped() const;
+    void setFacade(bool enabled);
+    QString facadeStatus() const;
+    Q_INVOKABLE void reconnectRadio();
     QString keying() const;
     void setKeying(const QString& k);
     QString connection() const;
@@ -79,6 +94,7 @@ Q_SIGNALS:
     void devicesChanged();
 
 private:
+    QTimer status_timer_;
     QVariantList devices_;
     QString error_;
 };

@@ -16,6 +16,13 @@ JNIEXPORT void JNICALL Java_org_cleverdomain_data2g_TncService_nativeStart(JNIEn
 
 JNIEXPORT void JNICALL Java_org_cleverdomain_data2g_TncService_nativeStop(JNIEnv*, jclass) { Modem::instance().post_stop(); }
 
+JNIEXPORT void JNICALL Java_org_cleverdomain_data2g_TncService_nativeStartRadio(JNIEnv*, jclass) { Modem::instance().post_start_radio(); }
+JNIEXPORT void JNICALL Java_org_cleverdomain_data2g_TncService_nativeStopRadio(JNIEnv*, jclass) { Modem::instance().post_stop_radio(); }
+JNIEXPORT jboolean JNICALL Java_org_cleverdomain_data2g_TncService_nativeRadioActive(JNIEnv*, jclass) { return Modem::instance().radio_running(); }
+JNIEXPORT jstring JNICALL Java_org_cleverdomain_data2g_TncService_nativeRadioStatus(JNIEnv* env, jclass) {
+    return env->NewStringUTF(Modem::instance().radio_status().c_str());
+}
+
 // The one call here that waits (3 s at most): the activity is being destroyed for good.
 JNIEXPORT void JNICALL Java_org_cleverdomain_data2g_TncService_nativeStopNow(JNIEnv*, jclass) { Modem::instance().stop_now(); }
 

@@ -69,6 +69,7 @@ struct RigSession {
         std::string error;
     };
     std::shared_ptr<PttJob> ptt;
+    std::deque<std::packaged_task<void(RigBackend&)>> commands;
 
     std::optional<double> frequency;
     std::string last_status;
@@ -127,6 +128,7 @@ void run(std::shared_ptr<RigSession> s) {
         {
             std::lock_guard<std::mutex> lock(s->m);
             s->dead = true;
+            s->commands.clear();
         }
         s->cv.notify_all();
         s->publish_status(first_line(e.what()), true);
@@ -140,6 +142,7 @@ void run(std::shared_ptr<RigSession> s) {
 
     while (true) {
         std::shared_ptr<RigSession::PttJob> job;
+        std::packaged_task<void(RigBackend&)> command;
         {
             std::unique_lock<std::mutex> lock(s->m);
             // Wake for: a stop, a keying request, or the poll deadline.
@@ -156,7 +159,7 @@ void run(std::shared_ptr<RigSession> s) {
             // check it would sleep straight through that notify and leave
             // polling dead until the next over keys the rig, which is what
             // issue #40 saw as "the frequency stops updating".
-            const auto wake = [&] { return s->stopping || s->ptt != nullptr; };
+            const auto wake = [&] { return s->stopping || s->ptt != nullptr || !s->commands.empty(); };
             if (s->paused || !polling) {
                 s->cv.wait(lock, [&] { return wake() || (polling && !s->paused); });
             } else {
@@ -165,6 +168,10 @@ void run(std::shared_ptr<RigSession> s) {
             if (s->stopping) return;
             job = s->ptt;
             s->ptt.reset();
+            if (!job && !s->commands.empty()) {
+                command = std::move(s->commands.front());
+                s->commands.pop_front();
+            }
         }
 
         if (job) {
@@ -189,6 +196,11 @@ void run(std::shared_ptr<RigSession> s) {
             // Keying costs a poll interval of quiet: a rig that has just
             // been keyed is the last thing worth interrogating.
             next_poll = Clock::now() + secs(interval);
+            continue;
+        }
+
+        if (command.valid()) {
+            command(*s->backend);
             continue;
         }
 
@@ -266,6 +278,7 @@ void RigController::stop() {
         s->stopping = true;
         s->paused = false;  // so a paused worker can notice and leave
         s->frequency.reset();
+        s->commands.clear();
     }
     s->cv.notify_all();
     // And that is all. `s` goes out of scope here; if the worker is
@@ -340,6 +353,26 @@ void RigController::set_ptt(bool on) {
                        std::to_string(s->config.operation_timeout_s) + " s");
     }
     if (job->failed) throw RigError(job->error);
+}
+
+std::future<void> RigController::request(std::function<void(RigBackend&)> fn) {
+    std::shared_ptr<RigSession> s;
+    { std::lock_guard lock(mutex_); s = session_; }
+    if (!s) throw RigError("rig control is not running");
+    const auto deadline = Clock::now() + secs(s->config.operation_timeout_s);
+    std::packaged_task<void(RigBackend&)> task([fn = std::move(fn), deadline](RigBackend& backend) {
+        if (Clock::now() >= deadline) throw RigError("rig request expired", -5);
+        fn(backend);
+    });
+    auto future = task.get_future();
+    {
+        std::lock_guard lock(s->m);
+        if (s->stopping || s->dead) throw RigError("rig is unavailable");
+        if (s->commands.size() >= 16) throw RigError("rig queue is full", -9);
+        s->commands.push_back(std::move(task));
+    }
+    s->cv.notify_all();
+    return future;
 }
 
 bool RigController::keyed_since_open() const {

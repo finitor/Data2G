@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "app/station.hpp"
+#include "app/rig_service.hpp"
 
 namespace data2g::androidapp {
 
@@ -45,6 +46,12 @@ public:
     // Any thread: start or stop on Qt's thread. post_start() is Starting at once.
     void post_start();
     void post_stop();
+    void post_start_radio();
+    void post_stop_radio();
+    bool radio_running() const { return radio_active_.load(); }
+    std::string radio_status() const;
+    std::optional<double> radio_frequency() const;
+    static bool facade_enabled();
     // post_stop(), waiting up to 3 s for it: for a destroy that ends the process next.
     void stop_now();
 
@@ -67,10 +74,15 @@ private:
     void start();
     void stop();
     void poll();
+    void start_radio();
+    void stop_radio();
     void add_log(std::string line);
     void set_status(std::string s);
 
     std::unique_ptr<app::Station> station_;
+    std::unique_ptr<app::RigService> radio_;
+    std::atomic<bool> radio_active_{false};
+    std::string radio_status_ = "Radio control disabled";
     std::atomic<State> state_{State::Stopped};
     bool was_ptt_ = false;  // Qt's thread
     QTimer poll_;

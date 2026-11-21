@@ -4,10 +4,12 @@
 #include <QGuiApplication>
 #include <QJniEnvironment>
 #include <QJniObject>
+#include <QTimer>
 #include <QQmlApplicationEngine>
 #include <QtCore/qcoreapplication_platform.h>
 
 #include <cstdlib>
+#include <clocale>
 
 #include "audio/android/androidaudio.hpp"
 #include "modem.hpp"
@@ -34,6 +36,7 @@ void init_bridges() {
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
+    std::setlocale(LC_NUMERIC, "C");
     // QSettings keys off these: set before anything reads one.
     QCoreApplication::setOrganizationName(QStringLiteral("Data2G"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("cleverdomain.org"));
@@ -45,6 +48,12 @@ int main(int argc, char* argv[]) {
     QQmlApplicationEngine engine;
     engine.loadFromModule("Data2G", "Main");
     if (engine.rootObjects().isEmpty()) return 1;
+    QTimer::singleShot(0, [] {
+        if (androidapp::Modem::facade_enabled()) {
+            const auto ctx = QNativeInterface::QAndroidApplication::context();
+            QJniObject::callStaticMethod<void>("org/cleverdomain/data2g/TncService", "startRadio", "(Landroid/content/Context;)V", ctx.object());
+        }
+    });
     const int rc = QGuiApplication::exec();
     // End without unwinding (SSTVAE's main.cpp): returning runs static
     // destructors under threads still using them, and Android's HWUI threads

@@ -79,6 +79,11 @@ public:
         return inner_->frequency_hz();
     }
 
+    void set_frequency_hz(double hz) override { require_inner(); inner_->set_frequency_hz(hz); }
+    RadioMode mode() override { require_inner(); return inner_->mode(); }
+    void set_mode(const RadioMode& m) override { require_inner(); inner_->set_mode(m); }
+    std::string rigctld_state() override { require_inner(); return inner_->rigctld_state(); }
+
     std::string description() const override {
         std::string text = inner_ ? inner_->description() : std::string("rig");
         if (transport_) {

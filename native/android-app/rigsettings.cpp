@@ -1,6 +1,8 @@
 #include "rigsettings.hpp"
 
 #include <QCoreApplication>
+#include <QJniObject>
+#include <QtCore/qcoreapplication_platform.h>
 #include <QPointer>
 #include <QSettings>
 #include <QVariantMap>
@@ -60,9 +62,57 @@ RigSettings::RigSettings(QObject* parent) : QObject(parent) {
             Qt::QueuedConnection);
     });
     refreshDevices();
+    connect(&status_timer_, &QTimer::timeout, this, [this] { Q_EMIT changed(); });
+    status_timer_.start(500);
 }
 
 RigSettings::~RigSettings() { rig::android::set_permission_callback({}); }
+
+bool RigSettings::facade() const { return data2g::androidapp::Modem::facade_enabled(); }
+bool RigSettings::serverLan() const {
+    QSettings settings;
+    return !QHostAddress(data2g::app::load_rig_server_settings(settings).listen).isLoopback();
+}
+void RigSettings::setServerLan(bool lan) {
+    if (!modemStopped()) return;
+    QSettings settings;
+    auto server = data2g::app::load_rig_server_settings(settings);
+    server.listen = lan ? "0.0.0.0" : "127.0.0.1";
+    data2g::app::save_rig_server_settings(settings, server);
+    Q_EMIT changed();
+}
+int RigSettings::serverPort() const { QSettings settings; return data2g::app::load_rig_server_settings(settings).port; }
+bool RigSettings::modemStopped() const { return data2g::androidapp::Modem::instance().state() == data2g::androidapp::State::Stopped; }
+void RigSettings::setServerPort(int port) {
+    if (!modemStopped() || port < 1 || port > 65535) return;
+    QSettings settings;
+    auto server = data2g::app::load_rig_server_settings(settings);
+    server.port = static_cast<quint16>(port);
+    data2g::app::save_rig_server_settings(settings, server);
+    Q_EMIT changed();
+}
+QString RigSettings::facadeStatus() const { return QString::fromStdString(data2g::androidapp::Modem::instance().radio_status()); }
+void RigSettings::setFacade(bool enabled) {
+    if (data2g::androidapp::Modem::instance().state() != data2g::androidapp::State::Stopped) {
+        error_ = tr("Stop the modem before changing radio control");
+        Q_EMIT changed();
+        return;
+    }
+    QSettings settings;
+    auto server = data2g::app::load_rig_server_settings(settings);
+    server.enabled = enabled;
+    data2g::app::save_rig_server_settings(settings, server);
+    const auto ctx = QNativeInterface::QAndroidApplication::context();
+    QJniObject::callStaticMethod<void>("org/cleverdomain/data2g/TncService", enabled ? "startRadio" : "stopRadio",
+                                     "(Landroid/content/Context;)V", ctx.object());
+    Q_EMIT changed();
+}
+void RigSettings::reconnectRadio() {
+    if (!facade() || data2g::androidapp::Modem::instance().state() != data2g::androidapp::State::Stopped) return;
+    // Both actions are delivered to the same service and native Qt event loop.
+    const auto ctx = QNativeInterface::QAndroidApplication::context();
+    QJniObject::callStaticMethod<void>("org/cleverdomain/data2g/TncService", "restartRadio", "(Landroid/content/Context;)V", ctx.object());
+}
 
 QString RigSettings::keying() const {
     const auto a = load_args();

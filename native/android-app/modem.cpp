@@ -14,6 +14,7 @@
 
 #include "app/log.hpp"
 #include "app/settings.hpp"
+#include "app/options.hpp"
 #include "arq/modes.hpp"
 #include "arq/session.hpp"
 #include "rig/config.hpp"
@@ -90,6 +91,58 @@ Modem::Modem() {
     poll_.start(500);
 }
 
+bool Modem::facade_enabled() { QSettings settings; return app::load_rig_server_settings(settings).enabled; }
+
+void Modem::post_start_radio() {
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [this] { start_radio(); }, Qt::QueuedConnection);
+}
+void Modem::post_stop_radio() {
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [this] { stop_radio(); }, Qt::QueuedConnection);
+}
+std::string Modem::radio_status() const { std::lock_guard lock(mu_); return radio_status_; }
+std::optional<double> Modem::radio_frequency() const { return radio_ ? radio_->frequency() : std::nullopt; }
+
+void Modem::start_radio() {
+    if (radio_) return;
+    try {
+#ifdef DATA2G_HAVE_RIG
+        const auto a = load_args();
+        if (!a.rig || a.ptt_method == "vox") throw rig::RigError("choose CAT, DTR or RTS keying first");
+        if (a.rig_model == rig::MODEL_DUMMY) throw rig::RigError("choose a radio model first");
+        QSettings settings;
+        const auto server = app::load_rig_server_settings(settings);
+        const auto hc = app::hamlib_config(a);
+        std::unique_ptr<rig::RigBackend> backend;
+        if (rig_connection() == "network") {
+            if (hc.model == rig::MODEL_NET_RIGCTL &&
+                (hc.device.empty() || hc.device == "localhost" || hc.device == "127.0.0.1" ||
+                 hc.device == "localhost:" + std::to_string(server.port) || hc.device == "127.0.0.1:" + std::to_string(server.port)))
+                throw rig::RigError("upstream rigctld must use a different endpoint from the local facade");
+            backend = rig::make_hamlib_backend(hc);
+        } else {
+            const auto params = rig::resolve_serial_params(hc, rig::serial_defaults(hc.model));
+            backend = rig::make_bridged_backend(hc, rig::android::make_transport(params), rig::make_hamlib_backend);
+        }
+        radio_ = std::make_unique<app::RigService>(std::move(backend), server.port, QHostAddress(server.listen));
+        radio_active_ = true;
+        app::log_line(app::INFO, "rigctld facade on " + server.listen.toStdString() + ":" + std::to_string(server.port));
+#else
+        throw rig::RigError("built without Hamlib");
+#endif
+    } catch (const std::exception& e) {
+        const std::string message = std::string("Radio: ") + e.what();
+        { std::lock_guard lock(mu_); radio_status_ = message; }
+        app::log_line(app::ERROR, message);
+    }
+}
+void Modem::stop_radio() {
+    if (station_ && station_->running()) return;  // Stop modem before releasing its radio
+    if (radio_) { radio_->stop(); radio_->wait_for_shutdown(2.0); radio_.reset(); }
+    radio_active_ = false;
+    std::lock_guard lock(mu_);
+    radio_status_ = "Radio control disabled";
+}
+
 void Modem::post_start() {
     if (state_.exchange(State::Starting) == State::Running) state_ = State::Running;
     set_status("Starting…");
@@ -109,6 +162,7 @@ void Modem::stop_now() {
         QCoreApplication::instance(),
         [this, done] {
             stop();
+            stop_radio();
             done->set_value();
         },
         Qt::QueuedConnection);
@@ -128,6 +182,7 @@ void Modem::start() {
         }
         app::log_line(app::ERROR, "not started: " + why);
         station_.reset();
+        if (radio_) radio_->release_modem();
         state_ = State::Stopped;
         poll();
     };
@@ -146,7 +201,12 @@ void Modem::start() {
     // USB and Bluetooth radios through the loopback bridge (rig/bridged.hpp);
     // a network one is Hamlib's own host:port. Throws from start() for a
     // configuration that can't work (resolve_serial_params' line conflicts).
-    station_->set_rig_factory([conn = rig_connection()](const rig::HamlibConfig& hc) -> std::unique_ptr<rig::RigBackend> {
+    if (facade_enabled()) {
+        start_radio();
+        if (!radio_) return fail("radio control could not start (see the log)");
+        try { radio_->reserve_modem(); } catch (const std::exception& e) { return fail(e.what()); }
+        station_->set_rig_factory([this](const rig::HamlibConfig&) { return radio_->modem_backend(); });
+    } else station_->set_rig_factory([conn = rig_connection()](const rig::HamlibConfig& hc) -> std::unique_ptr<rig::RigBackend> {
         if (conn == "network") return rig::make_hamlib_backend(hc);
         const rig::SerialParams params = rig::resolve_serial_params(hc, rig::serial_defaults(hc.model));
         return rig::make_bridged_backend(hc, rig::android::make_transport(params), rig::make_hamlib_backend);
@@ -167,11 +227,13 @@ void Modem::stop() {
         station_.reset();
         app::log_line(app::INFO, "modem stopped");
     }
+    if (radio_) radio_->release_modem();
     state_ = State::Stopped;
     poll();
 }
 
 void Modem::poll() {
+    if (radio_) { std::lock_guard lock(mu_); radio_status_ = radio_->status().toStdString(); }
     if (station_ && station_->running() && station_->failed()) {
         {
             std::lock_guard lock(mu_);

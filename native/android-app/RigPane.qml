@@ -2,8 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Rig control settings (SSTVAE's rig screen, settings only): the modem opens
-// the rig when it starts, so there is no Connect button here.
+// Radio settings and the optional modem-independent rigctld facade.
 ColumnLayout {
     id: pane
     spacing: 8
@@ -19,6 +18,41 @@ ColumnLayout {
         Layout.fillWidth: true
         wrapMode: Text.Wrap
     }
+
+    Switch {
+        text: "Share radio (rigctld)"
+        checked: pane.rig.facade
+        enabled: pane.rig.modemStopped
+        onClicked: pane.rig.facade = checked
+    }
+    Switch {
+        visible: pane.rig.facade
+        text: "Allow local-network clients"
+        checked: pane.rig.serverLan
+        enabled: pane.rig.modemStopped
+        onClicked: pane.rig.serverLan = checked
+    }
+    Hint {
+        visible: pane.rig.facade && pane.rig.serverLan
+        text: "LAN clients use this device's IP address. Rigctld has no authentication; use a trusted network."
+    }
+    RowLayout {
+        visible: pane.rig.facade
+        Label { text: "TCP port" }
+        SpinBox {
+            from: 1; to: 65535; editable: true
+            value: pane.rig.serverPort
+            enabled: pane.rig.modemStopped
+            onValueModified: pane.rig.serverPort = value
+        }
+    }
+    Hint {
+        text: "Apps can use Hamlib NET rigctl while the modem is stopped. "
+              + "The modem reserves transmit control while running."
+    }
+    Label { text: pane.rig.facadeStatus; visible: pane.rig.facade; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Button { text: "Reconnect radio"; visible: pane.rig.facade; enabled: pane.rig.modemStopped; onClicked: pane.rig.reconnectRadio() }
+    Hint { visible: pane.rig.facade; text: "After changing network or radio settings, or granting device permission, reconnect the radio." }
 
     // Keying first, since it decides what else is needed: VOX nothing, a control
     // line only the USB serial device (Hamlib's dummy stands in for the radio,

@@ -13,6 +13,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <sstream>
+#include <iomanip>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <utility>
@@ -199,6 +202,65 @@ public:
         const int rc = reconnecting([&] { return rig_get_freq(rig_, RIG_VFO_CURR, &freq); });
         if (rc != RIG_OK) throw RigError(hamlib_error("could not read frequency", rc));
         return static_cast<double>(freq);
+    }
+
+    void set_frequency_hz(double hz) override {
+        require_open();
+        if (!std::isfinite(hz) || hz <= 0) throw RigError("invalid frequency", -1);
+        const int rc = rig_set_freq(rig_, RIG_VFO_CURR, hz);
+        if (rc != RIG_OK) throw RigError(hamlib_error("frequency setting failed", rc), rc);
+    }
+
+    RadioMode mode() override {
+        require_open();
+        rmode_t m = RIG_MODE_NONE;
+        pbwidth_t width = 0;
+        const int rc = rig_get_mode(rig_, RIG_VFO_CURR, &m, &width);
+        if (rc != RIG_OK) throw RigError(hamlib_error("mode read failed", rc), rc);
+        return {rig_strrmode(m), width};
+    }
+
+    void set_mode(const RadioMode& m) override {
+        require_open();
+        const rmode_t value = rig_parse_mode(m.name.c_str());
+        if (value != RIG_MODE_USB && value != RIG_MODE_LSB && value != RIG_MODE_PKTUSB)
+            throw RigError("facade supports USB, LSB and PKTUSB", -1);
+        const int rc = rig_set_mode(rig_, RIG_VFO_CURR, value, m.width);
+        if (rc != RIG_OK) throw RigError(hamlib_error("mode setting failed", rc), rc);
+    }
+
+    std::string rigctld_state() override {
+        require_open();
+        // Serialize the documented NET rigctl protocol, using public rig_caps.
+        // Advertise only the current-VFO operations this facade implements.
+        const rig_caps* caps = rig_get_caps(static_cast<rig_model_t>(config_.model));
+        if (!caps) throw RigError("capabilities unavailable", -11);
+        constexpr rmode_t allowed = RIG_MODE_USB | RIG_MODE_LSB | RIG_MODE_PKTUSB;
+        rmode_t modes = 0;
+        for (const auto* list : {caps->rx_range_list1, caps->tx_range_list1})
+            for (int i = 0; i < HAMLIB_FRQRANGESIZ && list[i].endf != 0; ++i) modes |= list[i].modes & allowed;
+        std::ostringstream out;
+        out << "1\n1\n2\n" << std::setprecision(15);
+        const auto ranges = [&](const freq_range_t* list) {
+            for (int i = 0; i < HAMLIB_FRQRANGESIZ && list[i].endf != 0; ++i) {
+                const auto mask = list[i].modes & modes;
+                if (!mask) continue;
+                out << list[i].startf << ' ' << list[i].endf << " 0x" << std::hex << mask << std::dec
+                    << ' ' << list[i].low_power << ' ' << list[i].high_power << " 1 0\n";
+            }
+            out << "0 0 0 0 0 0 0\n";
+        };
+        ranges(caps->rx_range_list1);
+        ranges(caps->tx_range_list1);
+        out << "0x" << std::hex << modes << " 1\n0 0\n0x" << modes << " 2400\n0 0\n" << std::dec;
+        for (int i = 0; i < 12; ++i) out << "0\n";
+        out << "vfo_ops=0\nptt_type=1\nhas_get_vfo=1\nhas_set_vfo=0\n"
+            << "has_get_freq=" << bool(caps->get_freq) << "\nhas_set_freq=" << bool(caps->set_freq)
+            << "\nhas_get_mode=" << bool(caps->get_mode) << "\nhas_set_mode=" << bool(caps->set_mode)
+            << "\nhas_get_split_vfo=0\nhas_set_split_vfo=0\nhas_get_split_freq=0\nhas_set_split_freq=0\n"
+            << "has_get_split_mode=0\nhas_set_split_mode=0\nhas_get_ant=0\nhas_set_ant=0\n"
+            << "has_get_conf=0\nhas_set_conf=0\nhas_power2mW=0\nhas_mW2power=0\ndone\n";
+        return out.str();
     }
 
     // Through rig_get_caps_cptr: nothing here dereferences a RIG* (its

@@ -61,7 +61,7 @@
             android:name="org.cleverdomain.data2g.TncService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="microphone|mediaPlayback" />
+            android:foregroundServiceType="microphone|mediaPlayback|connectedDevice" />
 
         <!-- Collects a lasting USB permission and disappears (UsbAttach.java). -->
         <activity

@@ -93,7 +93,7 @@ bool Tnc::busy() const {
 }
 QString Tnc::frequency() const {
     auto* s = Modem::instance().station();
-    const auto hz = s ? s->rig_frequency() : std::nullopt;
+    const auto hz = s ? s->rig_frequency() : Modem::instance().radio_frequency();
     return hz ? QStringLiteral("%1 MHz").arg(*hz / 1e6, 0, 'f', 4) : QString();
 }
 QString Tnc::counters() const {

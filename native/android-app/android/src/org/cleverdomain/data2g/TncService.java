@@ -28,30 +28,38 @@ import android.os.Looper;
 public class TncService extends Service {
     private static final String CHANNEL_ID = "data2g.modem";
     private static final int NOTIFICATION_ID = 1;
+    private static final String ACTION_STOP_ALL = "org.cleverdomain.data2g.STOP_ALL";
     private static final String ACTION_START = "org.cleverdomain.data2g.START";
+    private static final String ACTION_RADIO_START = "org.cleverdomain.data2g.RADIO_START";
+    private static final String ACTION_RADIO_STOP = "org.cleverdomain.data2g.RADIO_STOP";
+    private static final String ACTION_RADIO_RESTART = "org.cleverdomain.data2g.RADIO_RESTART";
     private static final String ACTION_STOP = "org.cleverdomain.data2g.STOP";
     private static final long REFRESH_MS = 1000;
 
     private static native void nativeStart();
     private static native void nativeStop();
     private static native void nativeStopNow();
+    private static native void nativeStartRadio();
+    private static native void nativeStopRadio();
+    private static native boolean nativeRadioActive();
+    private static native String nativeRadioStatus();
     /** 0 stopped, 1 starting, 2 running. */
     private static native int nativeState();
     private static native String nativeStatusLine();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private static volatile boolean active = false;  // the modem was asked to run and hasn't stopped
+    private static volatile boolean active = false;  // radio and/or modem service is active
     private String shown = "";
 
     private final Runnable refresh = new Runnable() {
         @Override
         public void run() {
             if (!active) return;
-            if (nativeState() == 0) {  // the start failed, or the engine stopped
-                finish();
-                return;
-            }
-            String text = nativeStatusLine();
+            boolean modem = nativeState() != 0;
+            boolean radio = nativeRadioActive();
+            if (!modem && !radio) { finish(); return; }
+            String text = modem ? nativeStatusLine() : nativeRadioStatus();
+            startForeground(NOTIFICATION_ID, notification(text), serviceTypes(modem));
             if (!text.equals(shown)) {
                 shown = text;
                 NotificationManager nm = getSystemService(NotificationManager.class);
@@ -64,6 +72,16 @@ public class TncService extends Service {
     /** From the activity, while it is in the foreground (a microphone service may only start then). */
     public static void startModem(Context context) {
         context.startForegroundService(new Intent(context, TncService.class).setAction(ACTION_START));
+    }
+
+    public static void startRadio(Context context) {
+        context.startForegroundService(new Intent(context, TncService.class).setAction(ACTION_RADIO_START));
+    }
+    public static void stopRadio(Context context) {
+        if (active) context.startService(new Intent(context, TncService.class).setAction(ACTION_RADIO_STOP));
+    }
+    public static void restartRadio(Context context) {
+        context.startForegroundService(new Intent(context, TncService.class).setAction(ACTION_RADIO_RESTART));
     }
 
     /**
@@ -89,16 +107,23 @@ public class TncService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent != null ? intent.getAction() : null;
-        if (!ACTION_START.equals(action)) {
-            // Stop, or a restart with no intent: never reopen the radio on our own.
+        boolean modemStart = ACTION_START.equals(action);
+        boolean radioStart = ACTION_RADIO_START.equals(action) || ACTION_RADIO_RESTART.equals(action);
+        if (modemStart || radioStart) {
+            createChannel();
+            startForeground(NOTIFICATION_ID, notification("Starting…"), serviceTypes(modemStart || nativeState() != 0));
+            if (ACTION_RADIO_RESTART.equals(action)) nativeStopRadio();
+            if (radioStart) nativeStartRadio();
+            if (modemStart) nativeStart();
+        } else if (ACTION_STOP.equals(action)) {
+            nativeStop(); // radio service remains available
+        } else if (ACTION_RADIO_STOP.equals(action)) {
+            nativeStopRadio();
+        } else {
             nativeStop();
-            finish();
-            return START_NOT_STICKY;
+            nativeStopRadio();
+            // Keep the foreground service until native shutdown completes.
         }
-        // Foreground before the microphone opens, as the service type promises.
-        createChannel();
-        startForeground(NOTIFICATION_ID, notification("Starting…"), serviceTypes());
-        nativeStart();
         active = true;
         handler.removeCallbacks(refresh);
         handler.postDelayed(refresh, REFRESH_MS);
@@ -107,7 +132,7 @@ public class TncService extends Service {
 
     @Override
     public void onDestroy() {
-        if (active) nativeStop();
+        if (active) { nativeStop(); nativeStopRadio(); }
         active = false;
         handler.removeCallbacks(refresh);
         super.onDestroy();
@@ -125,8 +150,10 @@ public class TncService extends Service {
      * claimed without RECORD_AUDIO (API 34 throws), so it is dropped then; the
      * modem's own start will then say what is missing.
      */
-    private int serviceTypes() {
+    private int serviceTypes(boolean modem) {
+        if (!modem) return ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
         int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+        if (nativeRadioActive()) types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
         }
@@ -137,8 +164,8 @@ public class TncService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         // LOW: it changes with every connection and over; anything louder would be unbearable.
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Modem running", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("Shown while the Data2G modem is on the air");
+        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Radio and modem", NotificationManager.IMPORTANCE_LOW);
+        ch.setDescription("Shown while Data2G radio control or the modem is running");
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
     }
@@ -156,7 +183,7 @@ public class TncService extends Service {
         // Request code 1, not 0: PendingIntents are told apart by code and target, and
         // sharing one with the content intent would make one silently become the other.
         PendingIntent stopPi = PendingIntent.getService(
-                this, 1, new Intent(this, TncService.class).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE);
+                this, 1, new Intent(this, TncService.class).setAction(ACTION_STOP_ALL), PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Data2G TNC")
                 .setContentText(text)
@@ -164,7 +191,7 @@ public class TncService extends Service {
                 .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(
                         Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Stop modem", stopPi).build())
+                        "Stop all", stopPi).build())
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build();

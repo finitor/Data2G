@@ -15,13 +15,20 @@
 #define DATA2G_RIG_BACKEND_HPP
 
 #include <stdexcept>
+#include <cstdint>
 #include <string>
 
 namespace data2g::rig {
 
 class RigError : public std::runtime_error {
 public:
-    explicit RigError(const std::string& what) : std::runtime_error(what) {}
+    explicit RigError(const std::string& what, int code = -6) : std::runtime_error(what), code(code) {}
+    int code;  // Hamlib-compatible error, without a libhamlib dependency
+};
+
+struct RadioMode {
+    std::string name;
+    long width = 0;
 };
 
 class RigBackend {
@@ -40,6 +47,13 @@ public:
 
     // Dial frequency in Hz.
     virtual double frequency_hz() = 0;
+
+    // Optional controls, used by the rigctld facade. Existing key-only backends
+    // remain valid and explicitly report unsupported operations.
+    virtual void set_frequency_hz(double) { throw RigError("frequency setting unavailable", -11); }
+    virtual RadioMode mode() { throw RigError("mode unavailable", -11); }
+    virtual void set_mode(const RadioMode&) { throw RigError("mode setting unavailable", -11); }
+    virtual std::string rigctld_state() { throw RigError("capabilities unavailable", -11); }
 
     // For status text. Need not be the model name the user picked.
     virtual std::string description() const = 0;

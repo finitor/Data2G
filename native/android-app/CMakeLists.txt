@@ -21,6 +21,7 @@ endif()
 project(data2g_android LANGUAGES CXX)
 
 set(DATA2G_ANDROID_VERSION_CODE 1 CACHE STRING "Play upload version code; must increase on every upload")
+set(DATA2G_ANDROID_PACKAGE_NAME "org.cleverdomain.data2g" CACHE STRING "Android application ID; override for side-by-side device testing")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,7 +70,7 @@ endforeach()
 
 set_target_properties(data2g_android PROPERTIES
   QT_ANDROID_PACKAGE_SOURCE_DIR "${_pkg_dir}"
-  QT_ANDROID_PACKAGE_NAME "org.cleverdomain.data2g"
+  QT_ANDROID_PACKAGE_NAME "${DATA2G_ANDROID_PACKAGE_NAME}"
   QT_ANDROID_APP_NAME "Data2G TNC"
   QT_ANDROID_TARGET_SDK_VERSION 36
   QT_ANDROID_MIN_SDK_VERSION 29
@@ -81,7 +82,9 @@ set_target_properties(data2g_android PROPERTIES
 foreach(_perm IN ITEMS
     RECORD_AUDIO
     FOREGROUND_SERVICE FOREGROUND_SERVICE_MICROPHONE FOREGROUND_SERVICE_MEDIA_PLAYBACK
+    FOREGROUND_SERVICE_CONNECTED_DEVICE
     POST_NOTIFICATIONS  # API 33+; denied costs the notification, not the modem
+    CHANGE_NETWORK_STATE # connectedDevice foreground-service prerequisite for network radios
     INTERNET            # the KISS and VARA ports, even on 127.0.0.1
     # Bluetooth CAT: CONNECT is runtime from API 31; the legacy pair is what 29-30
     # use. Bonded devices only, so no SCAN and no location.

@@ -45,6 +45,7 @@
 
 #include <atomic>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -144,6 +145,11 @@ public:
     // session, if the rig refuses, or if the operation outlives
     // `operation_timeout_s`.
     void set_ptt(bool on);
+
+    // Bounded non-PTT work on the same hardware worker. Completion is a future:
+    // event-loop callers must poll it, never wait. PTT remains priority work.
+    // Pending work is cancelled on stop; expired work never touches hardware.
+    std::future<void> request(std::function<void(RigBackend&)> command);
 
     // A `rig::Keyer::Ptt`: set_ptt with the transmit interlock around it.
     // Polling pauses before the key and resumes after the unkey (even a

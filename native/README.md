@@ -13,6 +13,10 @@ it (`docs/ARCHITECTURE.md`, "The parity contract").
     tools/build_native.sh            # configure + build into native/build
     tools/build_native.sh --test     # also build the ctests, then ctest and pytest --native
 
+The shared [rig-control server](../docs/rig-control-server.md) also exposes
+CAT/PTT independently of the modem: Android has settings and a foreground
+radio service; `data2g-rigctld` is the portable standalone entry point.
+
 ## Directories
 
 | Directory | What |

@@ -116,7 +116,8 @@ else()
   # library into an armeabi-v7a APK.
   set(_hl_suffix "")
   if(ANDROID)
-    set(_hl_suffix "-${CMAKE_ANDROID_ARCH_ABI}")
+    # A recipe tag prevents a warm cache from reusing a 4 KB-aligned library.
+    set(_hl_suffix "-${CMAKE_ANDROID_ARCH_ABI}-16k")
   endif()
   if(FETCHCONTENT_BASE_DIR)
     set(_hl_root "${FETCHCONTENT_BASE_DIR}/hamlib-install-${_hl_v}${_hl_suffix}")
@@ -146,6 +147,12 @@ else()
   endif()
 
   if(NOT _hl_built)
+    if(ANDROID)
+      # Separate the autotools output too: changing LDFLAGS alone need not
+      # relink an existing libtool target. Keep old generated caches intact.
+      set(hamlib_src_BINARY_DIR "${hamlib_src_BINARY_DIR}-android-16k")
+      file(MAKE_DIRECTORY "${hamlib_src_BINARY_DIR}")
+    endif()
     # Unpacking a tarball gives every file the same mtime, so make
     # cannot tell that `configure` is already newer than `configure.ac`
     # and tries to re-run aclocal -- which fails on any machine without
@@ -188,13 +195,10 @@ else()
 
     # Cross-compiling for Android.
     #
-    # **Unverified as of 2026-08-22**: this session had no NDK and
-    # dl.google.com is unreachable from it, so the recipe below is
-    # written from the NDK's documented layout and has never been run.
-    # Treat a first failure as expected work rather than as a bug, and
-    # see docs/android.md ("Rig control over a socket") for what it is
-    # for. Everything downstream of it -- the bridge, the transport, the
-    # PTT routing -- is covered by tests that run without it.
+    # Validated on 2026-11-21 with NDK r27.2 / Android ARM64, including
+    # 16 KB library/APK alignment and NET rigctl against a dummy radio.
+    # Physical USB/Bluetooth radio qualification remains separate. See
+    # docs/rig-control-server.md for the build and validation record.
     #
     # Three things here are Android-specific and none of them are
     # optional:
@@ -355,6 +359,7 @@ else()
 
       list(APPEND _hl_configure_args
            "--host=${_hl_triple}"
+           "LDFLAGS=-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
            "CC=${_hl_cc}"
            "CXX=${_hl_cxx}"
            "AR=${_ndk_bin}/llvm-ar"

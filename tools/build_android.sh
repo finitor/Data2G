@@ -62,7 +62,8 @@ if [[ ! -f $KS ]]; then
     echo "no debug keystore at $KS: run any Gradle debug build once, or set ANDROID_DEBUG_KEYSTORE" >&2
     exit 1
 fi
-"$BT/zipalign" -f 4 "$UNSIGNED" "$OUT"
+"$BT/zipalign" -f -P 16 4 "$UNSIGNED" "$OUT"
+python3 "$ROOT/tools/check_android_native_alignment.py" "$OUT"
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android "$OUT"
 echo "built: $OUT"
 [[ $INSTALL == 1 ]] && "$SDK/platform-tools/adb" install -r "$OUT"

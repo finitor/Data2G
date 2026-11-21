@@ -6,6 +6,47 @@ API dependency. Android supplies its foreground-service and USB/Bluetooth
 integration; desktops can run the same service through `data2g-rigctld`.
 This adds radio control, not audio streaming or a different on-air protocol.
 
+## Rationale and design decisions
+
+The goal is to let applications that already speak Hamlib NET rigctl share
+the radio attached to a running Data2G application. On a phone, Data2G can
+already acquire USB/Bluetooth permissions and reach the radio through its
+platform transports. Exposing the familiar TCP interface lets another local
+application or a trusted LAN peer use that connection without implementing
+the radio's CAT dialect or competing for the hardware port. Compatibility
+with a particular client still needs testing; the current evidence includes
+Hamlib 4.7.2's library and `rigctl` executable.
+
+Radio control must work while the app is open and the modem is stopped. It
+therefore belongs to an app-owned service with a longer lifetime than the
+audio/modem station. Starting the modem borrows that service; stopping it
+must not close the radio or disconnect rig-control clients. Radio-only use
+needs neither a callsign nor microphone access. The user manually launches
+Data2G, so this feature does not need boot startup or an independent Android
+daemon installation.
+
+The implementation uses the existing C++20/Qt application layer, Hamlib and
+platform transports. The protocol and ownership code is shared; Android adds
+its lifecycle/UI integration and desktops get a standalone entry point.
+Keeping these boundaries avoids an Android-only protocol implementation and
+allows later desktop GUI integration without another server or CAT stack.
+
+| Decision | Reason and tradeoff |
+|---|---|
+| Reuse one Hamlib handle on one worker | Retains existing radio support and transport permissions; avoids concurrent CAT transactions and multiple owners of the same USB/serial device. |
+| Add a small protocol adapter | Reuses the app's lifecycle and PTT scheduling. The existing internal byte bridge carries raw CAT and is not a rigctld server; opening a second handle or merely exposing that bridge would not provide the required interface. |
+| Start with a declared current-VFO subset | Frequency, digital-use mode/passband and PTT cover the immediate use case. Capability negotiation and explicit errors make the limits visible; claiming the full rigctld command set would require substantially broader implementation and client qualification. |
+| Reserve control while the modem runs | Retuning between bursts can still break an ongoing exchange. The coarse reservation gives predictable ownership across the modem's whole lifetime; finer sharing can be added later with explicit state boundaries and tests. |
+| Give external PTT to one connected client | Another client cannot cut an active transmission. Disconnect triggers an unkey attempt, and a failed key/release keeps conservative state. Clients must retain their connection through key/unkey; one-shot clients that close immediately after keying do not hold PTT. |
+| Support configurable LAN listening | A radio attached to one machine or phone can serve applications elsewhere on the trusted network. Loopback remains the default, and LAN access is explicit because the rigctld protocol has no authentication. |
+| Qualify platforms in stages | Prove the shared behavior on macOS first, then build and test Android once stable. This provides cross-platform evidence without repeatedly building a full platform matrix on a resource-limited development machine. |
+
+The facade does not transport audio, implement a different modem, or change
+Data2G's waveform. VARA-style modem command/data compatibility, rig-control
+compatibility and over-air interoperability remain separate interfaces.
+The implementation is a tested software increment; it does not establish
+physical-radio compatibility or operation on every supported platform.
+
 ## Android
 
 In **Settings > Rig control**, select the existing radio model, connection

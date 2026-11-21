@@ -29,9 +29,12 @@ work belongs in its separate repository.
 
 ## Current maintainer-directed validation policy
 
-These temporary restrictions were confirmed by the maintainer on 2026-11-20
-and remain in force until explicitly changed. Review them when work resumes;
-elapsed time, a new agent, or a quota reset does not lift them.
+The maintainer clarified platform validation on 2026-11-21: prove a concept on
+one platform, then build and test other relevant platforms sequentially once
+it is reasonably stable. Avoid repeating a platform matrix for every small
+commit; the development machine has limited resources. This supersedes the
+older blanket restriction to macOS ARM64 builds. The remaining restrictions
+below stay in force until explicitly changed.
 
 - On 2026-11-20 the user resumed release-source builds and local tests on
   macOS ARM64 hosts, superseding the 2026-11-18 retraining pause for
@@ -42,8 +45,11 @@ elapsed time, a new agent, or a quota reset does not lift them.
 - Keep repository GitHub Actions disabled, including manual hosted runs.
   Do not enable, dispatch or rerun hosted workflows without a policy change
   from the user. This applies even though this fork is public.
-- Use local macOS ARM64 validation. Other platform
-  builds remain suspended until requested. Do not change billing settings.
+- Start local correctness validation on macOS ARM64, then qualify the stable
+  feature on Android and other relevant platforms in turn. Do not overlap
+  expensive platform builds or repeat them for every incremental commit.
+  Record which revision and platforms were actually tested, including device
+  or hardware gaps. Do not change billing settings.
 
 ## Repository boundaries and workflow
 

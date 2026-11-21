@@ -35,7 +35,7 @@ allows later desktop GUI integration without another server or CAT stack.
 |---|---|
 | Reuse one Hamlib handle on one worker | Retains existing radio support and transport permissions; avoids concurrent CAT transactions and multiple owners of the same USB/serial device. |
 | Add a small protocol adapter | Reuses the app's lifecycle and PTT scheduling. The existing internal byte bridge carries raw CAT and is not a rigctld server; opening a second handle or merely exposing that bridge would not provide the required interface. |
-| Start with a declared current-VFO subset | Frequency, digital-use mode/passband and PTT cover the immediate use case. Capability negotiation and explicit errors make the limits visible; claiming the full rigctld command set would require substantially broader implementation and client qualification. |
+| Extend a declared command subset in tested increments | The initial current-VFO frequency/mode/PTT proof is now extended to VFO selection/targeting, split and common levels. There is no Android or Hamlib architectural restriction to that initial subset. Each added operation needs protocol, ownership and client tests; memories and raw CAT remain separate work. |
 | Reserve control while the modem runs | Retuning between bursts can still break an ongoing exchange. The coarse reservation gives predictable ownership across the modem's whole lifetime; finer sharing can be added later with explicit state boundaries and tests. |
 | Give external PTT to one connected client | Another client cannot cut an active transmission. Disconnect triggers an unkey attempt, and a failed key/release keeps conservative state. Clients must retain their connection through key/unkey; one-shot clients that close immediately after keying do not hold PTT. |
 | Support configurable LAN listening | A radio attached to one machine or phone can serve applications elsewhere on the trusted network. Loopback remains the default, and LAN access is explicit because the rigctld protocol has no authentication. |
@@ -69,7 +69,8 @@ it down and attempts to unkey the radio.
 The modem borrows the existing radio when started. Stopping the modem leaves
 the server, client connections and physical radio open. The initial sharing
 policy reserves transmit control for the modem for its entire running
-lifetime: external reads continue, but external PTT and tuning return busy.
+lifetime: cached external reads continue, but external PTT and all radio-setting
+writes return busy. Reads without a safe cached value also return busy.
 Stop the modem to give external applications transmit/tuning control.
 
 ## Desktop / headless
@@ -101,18 +102,49 @@ paths are not part of those settings.
 
 ## Compatibility and ownership
 
-This is a current-VFO subset, not a full replacement for every Hamlib command.
-`VFOA` is the facade's alias for the physical rig's current VFO; it does not
-switch the hardware VFO. Split, levels, memories, raw CAT, arbitrary VFO
-switching and TCI are outside this increment.
+The facade implements the operations below when the selected Hamlib backend
+supports them. VFO names now refer to actual hardware VFOs; `VFOA` is no longer
+an alias for whichever VFO happens to be current. Memories, VFO copy/exchange
+operations, functions, parameters, raw CAT and TCI remain outside this increment.
+Unsupported operations are reported explicitly rather than simulated.
 
 | Operation | Commands |
 |---|---|
 | Frequency | `f` / `F`, `get_freq` / `set_freq` |
-| Mode and passband | `m` / `M`, `get_mode` / `set_mode`; setters accept USB, LSB, PKTUSB |
+| Mode and passband | `m` / `M`, `get_mode` / `set_mode`; Hamlib mode names supported by the selected radio |
+| VFO | `v` / `V`, `get_vfo` / `set_vfo`, `get_vfo_list` |
+| Split routing | `s` / `S`, `get_split_vfo` / `set_split_vfo` |
+| Split TX frequency | `i` / `I`, `get_split_freq` / `set_split_freq` |
+| Split TX mode/passband | `x` / `X`, `get_split_mode` / `set_split_mode` |
+| Combined split TX frequency/mode | `k` / `K`, `get_split_freq_mode` / `set_split_freq_mode` |
+| Levels | `l` / `L`, `get_level` / `set_level`; declared subset intersected with radio support |
 | PTT | `t` / `T`, `get_ptt` / `set_ptt`; setters accept 0 or 1 using configured CAT/control-line keying |
-| Negotiation | `chk_vfo`, `dump_state`, `get_vfo`, `get_lock_mode`, `get_info` |
+| Negotiation | `chk_vfo`, `set_vfo_opt`, `dump_state`, `get_lock_mode`, `get_info` |
 | Disconnect client | `q` / `quit` |
+
+Each connection defaults to current-VFO syntax. `\set_vfo_opt 1` enables a
+VFO argument before the normal arguments for frequency, mode, split, level
+and PTT commands, for example `F VFOB 14075000` or `l currVFO SWR`.
+`get_vfo`, `set_vfo`, `get_vfo_list` and negotiation commands take no extra
+VFO argument. `chk_vfo` reports that connection's setting; changing one client
+never changes another client's syntax. `\set_vfo_opt 0` restores the default.
+PTT accepts only the current VFO and never switches VFOs to key a target.
+
+The declared level subset is `AF`, `RF`, `SQL`, `RFPOWER`, `MICGAIN`, `COMP`,
+`AGC`, `ATT`, `PREAMP`, `CWPITCH`, `KEYSPD`, `IF`, `APF`, `NR`, `NOTCHF`,
+`MONITOR_GAIN`, `BALANCE`, `STRENGTH`, `RAWSTR`, `SWR`, `ALC`,
+`RFPOWER_METER` and `RFPOWER_METER_WATTS`. Read-only meters cannot be set.
+Writable float levels in this subset use 0..1; integer levels require whole
+numbers in Hamlib units (for example Hz or dB). The radio enforces its own
+supported values. Capability level masks reflect the supported intersection,
+including separate get/set masks. Range, tuning-step and filter metadata
+comes from the selected Hamlib model's public capability table, rather than
+the original synthetic USB-only table. This is model metadata, not a live
+snapshot of every configuration override; in particular, an upstream NET
+rigctl connection uses NET model metadata for those tables. Runtime level
+masks and the VFO list are queried through Hamlib's public API. Capability
+negotiation is captured when the service opens; reconnect after changing
+the underlying radio configuration.
 
 Long commands accept the usual leading backslash. Default responses and
 extended `+`, `;`, `|`, `,` separators are supported. The lock-mode query emits
@@ -122,12 +154,20 @@ Unsupported operations return `RPRT -11`; conflicting operations return
 another client cannot unkey it. Failed keys retain conservative ownership
 because the command may have reached the radio. Disconnect/shutdown attempts
 to unkey. PTT readback reports service-owned state, not unrelated front-panel
-or other physical PTT sources. Cached frequency/mode reads avoid CAT traffic
-while transmitting or while the modem reserves the radio.
+or other physical PTT sources. All setting writes, including VFO/split/level
+changes by the PTT owner, are blocked during TX. Cached reads avoid CAT traffic
+while the modem reserves the radio. During external TX, current-VFO level
+reads remain live for meters such as power/SWR; other controls use cached
+values or return busy. Cache entries include operation, target and level;
+mutations invalidate them conservatively, including failed writes that may
+have reached hardware. Missing cached data returns busy rather than a value
+from another VFO.
 
 The hardware remains on one worker. Modem PTT retains priority over queued
-queries. Control work, per-client input and output, and client counts are
-bounded. Pending work is cancelled on shutdown and expired queued work does
+queries; external PTT and disconnect cleanup use a separate bounded FIFO
+ahead of routine queries. Each connection remains sequential, so a client
+should not pipeline a long series of reads ahead of its own unkey. Control
+work, per-client input and output, and client counts are bounded. Pending work is cancelled on shutdown and expired queued work does
 not touch the radio. No software can guarantee an unkey after process death,
 a lost cable or hardware that no longer accepts commands.
 
@@ -136,10 +176,13 @@ a lost cable or hardware that no longer accepts commands.
 - Feature branch: `feature/rigctld`; incremental base `f6309ec`, with tracked
   agent guidance added at `32ef773`. The requested integration context is the
   fork's incremental work, not an upstream PR. Do not publish to upstream.
+  The VFO/split/level increment follows `b856c6e`; the instruction source is
+  root `AGENTS.md`, last updated by `d6f1247`.
 - Validation starts on macOS ARM64, followed by Android ARM64 once stable,
   with expensive builds run sequentially. Hosted Actions remain disabled.
 - `test_rig_service` exercises real Hamlib NET clients, partial/pipelined and
-  extended responses, real Station start/stop cycles, PTT contention,
+  extended responses, actual VFO selection and explicit targeting, split and
+  integer/float levels, real Station start/stop cycles, PTT contention,
   disconnect/failure cleanup, shutdown and queue cancellation without radio
   hardware. The existing rig/bridge/Hamlib/transmit tests cover regressions.
 
@@ -160,6 +203,33 @@ optimized native code. This keeps an installed production app and its settings
 separate. Source defaults retain the normal application ID.
 
 ## Local validation record (2026-11-21)
+
+The VFO/split/level extension was validated after the initial proof:
+
+- macOS ARM64, AppleClang 17, Qt 6.11.1, Hamlib 4.7.2: all six selected
+  native tests passed; `test_rig_service` now has 241 checks. These include
+  real NET clients, actual A/B selection and independent targeting, split
+  frequency/mode/routing, typed levels, invalid/read-only level errors,
+  separate client VFO syntax, cache invalidation, modem/PTT interlocks,
+  live TX meters and bounded priority/cancellation queues. Layering,
+  explicit includes and whitespace checks passed.
+- Android ARM64 was built afterward with the same Qt/NDK configuration
+  below. All 73 native libraries passed the 16 KB ELF/APK alignment check.
+  The separate test package passed raw-protocol and standard Hamlib `rigctl`
+  checks for VFO selection/targeting, split controls, float/integer levels,
+  live TX meters and write interlocks. Background use and restoration after
+  manual relaunch also passed with the modem stopped and no callsign.
+  This repeat used temporary ADB forwarding to the all-IPv4 listener:
+  direct phone Wi-Fi connectivity timed out for both the test port and the
+  phone's ADB port, so direct-LAN behavior was not requalified in this run.
+  The earlier direct-LAN proof is recorded below. The test server was
+  disabled and forwards removed afterward; production app data was untouched.
+- Physical-radio, USB/Bluetooth, Windows/Linux and actual 16 KB-kernel
+  runtime qualification remain outstanding. Memory-channel operations and
+  other command families outside the declared subset remain future work.
+  Hosted Actions remained disabled; no performance claim is made.
+
+Initial frequency/mode/PTT proof:
 
 - macOS ARM64, AppleClang 17, Qt 6.11.1, Hamlib 4.7.2: the six selected
   native tests passed. The focused rig-service test was extended to 91
@@ -203,7 +273,14 @@ A device smoke test can be reproduced without a radio:
    upstream endpoint `127.0.0.1:14532`. Enable the facade on port 14533 with
    LAN clients allowed. Leave the callsign blank and the modem stopped.
 5. Use `rigctl -m 2 -r "$PHONE_IP:14533"` from a trusted LAN peer to exercise
-   frequency, mode and PTT against the dummy only. Repeat a read after Home,
+   frequency, mode, VFO, split, levels and PTT against the dummy only.
+   For example, with the dummy selected:
+
+   ```sh
+   rigctl -m 2 -r "$PHONE_IP:14533" V VFOB F 14105000 f V VFOA S 1 VFOB s I 14076000 i X CW 500 x L AF 0.4 l AF S 0 VFOB
+   ```
+
+   Repeat a read after Home,
    then after closing and manually reopening the app.
 6. Stop/disable the test server and remove the temporary ADB reverse mapping.
 

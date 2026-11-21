@@ -70,6 +70,7 @@ struct RigSession {
     };
     std::shared_ptr<PttJob> ptt;
     std::deque<std::packaged_task<void(RigBackend&)>> commands;
+    std::deque<std::packaged_task<void(RigBackend&)>> urgent;
 
     std::optional<double> frequency;
     std::string last_status;
@@ -129,6 +130,7 @@ void run(std::shared_ptr<RigSession> s) {
             std::lock_guard<std::mutex> lock(s->m);
             s->dead = true;
             s->commands.clear();
+            s->urgent.clear();
         }
         s->cv.notify_all();
         s->publish_status(first_line(e.what()), true);
@@ -159,7 +161,7 @@ void run(std::shared_ptr<RigSession> s) {
             // check it would sleep straight through that notify and leave
             // polling dead until the next over keys the rig, which is what
             // issue #40 saw as "the frequency stops updating".
-            const auto wake = [&] { return s->stopping || s->ptt != nullptr || !s->commands.empty(); };
+            const auto wake = [&] { return s->stopping || s->ptt != nullptr || !s->urgent.empty() || !s->commands.empty(); };
             if (s->paused || !polling) {
                 s->cv.wait(lock, [&] { return wake() || (polling && !s->paused); });
             } else {
@@ -168,9 +170,10 @@ void run(std::shared_ptr<RigSession> s) {
             if (s->stopping) return;
             job = s->ptt;
             s->ptt.reset();
-            if (!job && !s->commands.empty()) {
-                command = std::move(s->commands.front());
-                s->commands.pop_front();
+            auto& queue = s->urgent.empty() ? s->commands : s->urgent;
+            if (!job && !queue.empty()) {
+                command = std::move(queue.front());
+                queue.pop_front();
             }
         }
 
@@ -279,6 +282,7 @@ void RigController::stop() {
         s->paused = false;  // so a paused worker can notice and leave
         s->frequency.reset();
         s->commands.clear();
+        s->urgent.clear();
     }
     s->cv.notify_all();
     // And that is all. `s` goes out of scope here; if the worker is
@@ -355,7 +359,7 @@ void RigController::set_ptt(bool on) {
     if (job->failed) throw RigError(job->error);
 }
 
-std::future<void> RigController::request(std::function<void(RigBackend&)> fn) {
+std::future<void> RigController::request(std::function<void(RigBackend&)> fn, bool priority) {
     std::shared_ptr<RigSession> s;
     { std::lock_guard lock(mutex_); s = session_; }
     if (!s) throw RigError("rig control is not running");
@@ -368,8 +372,11 @@ std::future<void> RigController::request(std::function<void(RigBackend&)> fn) {
     {
         std::lock_guard lock(s->m);
         if (s->stopping || s->dead) throw RigError("rig is unavailable");
-        if (s->commands.size() >= 16) throw RigError("rig queue is full", -9);
-        s->commands.push_back(std::move(task));
+        auto& queue = priority ? s->urgent : s->commands;
+        // Separate capacity leaves room for disconnect cleanup even when all
+        // eight facade clients already have a key/unkey request pending.
+        if (queue.size() >= 16) throw RigError("rig queue is full", -9);
+        queue.push_back(std::move(task));
     }
     s->cv.notify_all();
     return future;

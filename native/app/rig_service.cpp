@@ -20,6 +20,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,9 @@ struct SharedRadio {
     std::uint64_t owner = 0;
     std::optional<double> frequency;
     std::optional<rig::RadioMode> mode;
+    std::optional<std::string> vfo;
+    using CacheKey = std::tuple<rig::RadioOp, std::string, std::string>;
+    std::map<CacheKey, rig::RadioControl> reads;
     std::string caps, description, status = "Radio connecting";
 };
 namespace {
@@ -63,6 +67,8 @@ public:
         std::optional<double> frequency;
         std::optional<rig::RadioMode> mode;
         std::string caps;
+        std::optional<std::string> vfo;
+        try { vfo = backend_->control({rig::RadioOp::GetVfo}).name; } catch (...) {}
         try { frequency = backend_->frequency_hz(); } catch (...) {}
         try { mode = backend_->mode(); } catch (...) {}
         try { caps = backend_->rigctld_state(); } catch (...) {}
@@ -70,6 +76,7 @@ public:
         state_->description = backend_->description();
         state_->frequency = frequency;
         state_->mode = mode;
+        state_->vfo = vfo;
         state_->caps = std::move(caps);
         state_->ready = true;
     }
@@ -98,6 +105,7 @@ public:
     rig::RadioMode mode() override { return backend_->mode(); }
     void set_mode(const rig::RadioMode& mode) override { backend_->set_mode(mode); }
     std::string rigctld_state() override { return backend_->rigctld_state(); }
+    rig::RadioControl control(const rig::RadioControl& command) override { return backend_->control(command); }
     std::string description() const override { return backend_->description(); }
 private:
     std::unique_ptr<rig::RigBackend> backend_;
@@ -149,7 +157,10 @@ Command parse(const QByteArray& line) {
     if (!cmd.name.empty() && cmd.name[0] == '\\') cmd.name.erase(0, 1);
     static const std::map<std::string, std::string> names = {
         {"f", "get_freq"}, {"F", "set_freq"}, {"m", "get_mode"}, {"M", "set_mode"},
-        {"t", "get_ptt"}, {"T", "set_ptt"}, {"v", "get_vfo"}, {"_", "get_info"}, {"q", "quit"}
+        {"t", "get_ptt"}, {"T", "set_ptt"}, {"v", "get_vfo"}, {"V", "set_vfo"},
+        {"s", "get_split_vfo"}, {"S", "set_split_vfo"}, {"i", "get_split_freq"}, {"I", "set_split_freq"},
+        {"x", "get_split_mode"}, {"X", "set_split_mode"}, {"k", "get_split_freq_mode"}, {"K", "set_split_freq_mode"},
+        {"l", "get_level"}, {"L", "set_level"}, {"_", "get_info"}, {"q", "quit"}
     };
     if (const auto n = names.find(cmd.name); n != names.end()) cmd.name = n->second;
     std::string arg;
@@ -185,6 +196,7 @@ double number(const std::string& text) {
 struct RigService::Client {
     QPointer<QTcpSocket> socket;
     std::uint64_t id = 0;
+    bool vfo_opt = false;  // per connection, accessed only on the radio worker
     std::atomic<bool> alive{true};
     QByteArray input;
     std::deque<QByteArray> lines;
@@ -282,7 +294,7 @@ void RigService::disconnect(const std::shared_ptr<Client>& c) {
             backend.set_ptt(false);
             std::lock_guard lock(s->mutex);
             s->owner = 0;
-        }));
+        }, true));
     } catch (...) {}  // stop's worker-owned close is the final backstop
 }
 void RigService::read(const std::shared_ptr<Client>& c) {
@@ -320,31 +332,71 @@ void RigService::process(const std::shared_ptr<Client>& c) {
         c->pending = radio_->controller->request([s = radio_, c, cmd = c->command, reply = c->reply](rig::RigBackend& backend) {
             if (!c->alive) throw rig::RigError("client disconnected");
             const auto& name = cmd.name;
-            const auto& args = cmd.args;
+            auto args = cmd.args;
             const auto need = [&](std::size_t n) { if (args.size() != n) throw rig::RigError("wrong argument count", -1); };
-            if (name == "chk_vfo") { need(0); reply->fields = {{"VFO", "0"}}; return; }
-            if (name == "get_vfo") { need(0); reply->fields = {{"VFO", "VFOA"}}; return; }
-            // Hamlib 4.7.2 consults this before set_mode and expects BOTH the
-            // value and a status line (its NET backend consumes two records).
+            if (name == "chk_vfo") { need(0); reply->fields = {{"ChkVFO", c->vfo_opt ? "1" : "0"}}; return; }
+            if (name == "set_vfo_opt") {
+                need(1);
+                if (args[0] != "0" && args[0] != "1") throw rig::RigError("invalid VFO option", -1);
+                c->vfo_opt = args[0] == "1"; return;
+            }
+            // Hamlib 4.7.2 consumes both the value and a status record here.
             if (name == "get_lock_mode") { need(0); reply->fields = {{"Locked", "0"}}; reply->report = true; return; }
             if (name == "dump_state") {
                 need(0); std::lock_guard lock(s->mutex);
                 if (s->caps.empty()) throw rig::RigError("capabilities unavailable", -11);
                 reply->raw = s->caps; return;
             }
-            if (name == "get_info") { need(0); reply->fields = {{"Info", "Data2G current-VFO rig proxy"}}; return; }
-            const bool write = name == "set_freq" || name == "set_mode" || name == "set_ptt";
-            bool cached;
+            if (name == "get_info") { need(0); reply->fields = {{"Info", "Data2G shared rig proxy"}}; return; }
+            using Op = rig::RadioOp;
+            static const std::map<std::string, Op> operations = {
+                {"get_freq", Op::GetFrequency}, {"set_freq", Op::SetFrequency},
+                {"get_mode", Op::GetMode}, {"set_mode", Op::SetMode},
+                {"get_vfo", Op::GetVfo}, {"set_vfo", Op::SetVfo}, {"get_vfo_list", Op::GetVfoList},
+                {"get_split_vfo", Op::GetSplitVfo}, {"set_split_vfo", Op::SetSplitVfo},
+                {"get_split_freq", Op::GetSplitFrequency}, {"set_split_freq", Op::SetSplitFrequency},
+                {"get_split_mode", Op::GetSplitMode}, {"set_split_mode", Op::SetSplitMode},
+                {"get_split_freq_mode", Op::GetSplitFrequencyMode}, {"set_split_freq_mode", Op::SetSplitFrequencyMode},
+                {"get_level", Op::GetLevel}, {"set_level", Op::SetLevel}
+            };
+            const bool ptt = name == "get_ptt" || name == "set_ptt";
+            const auto operation = operations.find(name);
+            if (!ptt && operation == operations.end()) throw rig::RigError("command unsupported", -11);
+            rig::RadioControl request{ptt ? Op::GetVfo : operation->second};
+            const bool no_target = !ptt && (request.op == Op::GetVfo || request.op == Op::SetVfo || request.op == Op::GetVfoList);
+            if (c->vfo_opt && !no_target) {
+                if (args.empty()) throw rig::RigError("missing VFO", -1);
+                request.target = args.front(); args.erase(args.begin());
+            }
+            const bool write = name.starts_with("set_");
+            bool cached, transmitting, modem;
             {
                 std::lock_guard lock(s->mutex);
                 if (!s->ready || s->stopping) throw rig::RigError("radio unavailable");
                 if (write && (s->modem || (s->owner && s->owner != c->id))) throw rig::RigError("radio busy", -9);
-                cached = s->modem || s->ptt;
+                modem = s->modem; transmitting = s->ptt; cached = modem || transmitting;
+                // NET clients can spell currVFO as the actual VFO name on the
+                // wire. During a reservation, use the same current-VFO cache
+                // and meter path without allowing a temporary VFO switch.
+                if (!ptt && !write && cached && s->vfo && request.target == *s->vfo) request.target = "currVFO";
+            }
+            if (ptt && request.target != "currVFO") {
+                // PTT never temporarily switches VFOs. Resolve an explicit
+                // target while idle, then retain that identity through unkey.
+                if (!cached) {
+                    const auto actual = backend.control({Op::GetVfo});
+                    std::lock_guard lock(s->mutex);
+                    if (s->vfo && *s->vfo != actual.name) { s->frequency.reset(); s->mode.reset(); s->reads.clear(); }
+                    s->vfo = actual.name;
+                }
+                std::lock_guard lock(s->mutex);
+                if (!s->vfo || request.target != *s->vfo) throw rig::RigError("PTT requires the current VFO", -11);
             }
             if (name == "get_ptt") {
                 need(0); std::lock_guard lock(s->mutex);
-                reply->fields = {{"PTT", s->ptt ? "1" : "0"}};
-            } else if (name == "set_ptt") {
+                reply->fields = {{"PTT", s->ptt ? "1" : "0"}}; return;
+            }
+            if (name == "set_ptt") {
                 need(1);
                 if (args[0] != "0" && args[0] != "1") throw rig::RigError("unsupported PTT type", -1);
                 const bool on = args[0] == "1";
@@ -356,36 +408,97 @@ void RigService::process(const std::shared_ptr<Client>& c) {
                 }
                 backend.set_ptt(on);
                 { std::lock_guard lock(s->mutex); if (!on) s->owner = 0; }
-            } else if (name == "get_freq") {
-                need(0);
-                if (!cached) { const auto hz = backend.frequency_hz(); std::lock_guard lock(s->mutex); s->frequency = hz; }
-                std::lock_guard lock(s->mutex);
-                if (!s->frequency) throw rig::RigError("frequency unavailable");
-                reply->fields = {{"Frequency", std::to_string(*s->frequency)}};
-            } else if (name == "set_freq") {
-                need(1);
-                if (cached) throw rig::RigError("radio transmitting", -9);
-                const auto hz = number(args[0]);
+                return;
+            }
+            if (write && cached) throw rig::RigError("radio transmitting", -9);
+            const auto frequency = [&](std::size_t i) {
+                const auto hz = number(args[i]);
                 if (hz <= 0) throw rig::RigError("invalid frequency", -1);
-                backend.set_frequency_hz(hz);
-                const auto actual = backend.frequency_hz();
-                std::lock_guard lock(s->mutex); s->frequency = actual;
-            } else if (name == "get_mode") {
-                need(0);
-                if (!cached) { const auto mode = backend.mode(); std::lock_guard lock(s->mutex); s->mode = mode; }
-                std::lock_guard lock(s->mutex);
-                if (!s->mode) throw rig::RigError("mode unavailable", -11);
-                reply->fields = {{"Mode", s->mode->name}, {"Passband", std::to_string(s->mode->width)}};
-            } else if (name == "set_mode") {
-                need(2);
-                if (cached) throw rig::RigError("radio transmitting", -9);
-                const double width = number(args[1]);
+                return hz;
+            };
+            const auto mode = [&](std::size_t i) {
+                request.name = args[i];
+                const double width = number(args[i + 1]);
                 if (width < -1 || width > 100000 || std::floor(width) != width) throw rig::RigError("invalid passband", -1);
-                backend.set_mode({args[0], static_cast<long>(width)});
-                const auto mode = backend.mode();
-                std::lock_guard lock(s->mutex); s->mode = mode;
-            } else throw rig::RigError("command unsupported", -11);
-        });
+                request.width = static_cast<long>(width);
+            };
+            switch (request.op) {
+                case Op::SetFrequency: case Op::SetSplitFrequency: need(1); request.value = frequency(0); break;
+                case Op::SetMode: case Op::SetSplitMode: need(2); mode(0); break;
+                case Op::SetSplitFrequencyMode: need(3); request.value = frequency(0); mode(1); break;
+                case Op::SetVfo: need(1); request.name = args[0]; break;
+                case Op::SetSplitVfo:
+                    need(2);
+                    if (args[0] != "0" && args[0] != "1") throw rig::RigError("invalid split state", -1);
+                    request.split = args[0] == "1"; request.name = args[1]; break;
+                case Op::GetLevel: need(1); request.name = args[0]; break;
+                case Op::SetLevel: need(2); request.name = args[0]; request.value = number(args[1]); break;
+                default: need(0); break;
+            }
+            const SharedRadio::CacheKey key{request.op, request.target, request.name};
+            auto result = request;
+            if (write) {
+                // Invalidate before the call: a reported failure can still have
+                // changed hardware. Never reuse another VFO's frequency/mode.
+                {
+                    std::lock_guard lock(s->mutex);
+                    s->reads.clear();
+                    if (request.op != Op::SetLevel) { s->frequency.reset(); s->mode.reset(); }
+                    if (request.op == Op::SetVfo || request.op == Op::SetSplitVfo) s->vfo.reset();
+                }
+                backend.control(request);
+                // Preserve the existing current-frequency/mode readback. Other
+                // writes wait for a getter/poll rather than a chain of CAT reads.
+                if (request.target == "currVFO" && request.op == Op::SetFrequency) {
+                    const auto hz = backend.frequency_hz(); std::lock_guard lock(s->mutex); s->frequency = hz;
+                } else if (request.target == "currVFO" && request.op == Op::SetMode) {
+                    const auto m = backend.mode(); std::lock_guard lock(s->mutex); s->mode = m;
+                } else if (request.op == Op::SetVfo) {
+                    const auto v = backend.control({Op::GetVfo}); std::lock_guard lock(s->mutex); s->vfo = v.name;
+                }
+                return;
+            }
+            // A level read of the current VFO is useful during external TX
+            // (power/SWR). Never retarget a meter read during TX, and never send
+            // extra CAT reads while the modem reserves the radio.
+            if (transmitting && !modem && request.op == Op::GetLevel && request.target == "currVFO") cached = false;
+            if (request.op == Op::GetVfoList) cached = false; // metadata, no CAT transaction
+            if (cached) {
+                std::lock_guard lock(s->mutex);
+                if (request.op == Op::GetFrequency && request.target == "currVFO" && s->frequency) result.value = *s->frequency;
+                else if (request.op == Op::GetMode && request.target == "currVFO" && s->mode) { result.name = s->mode->name; result.width = s->mode->width; }
+                else if (request.op == Op::GetVfo && s->vfo) result.name = *s->vfo;
+                else if (const auto i = s->reads.find(key); i != s->reads.end()) result = i->second;
+                else throw rig::RigError("no safe cached value; radio busy", -9);
+            } else {
+                result = backend.control(request);
+                std::lock_guard lock(s->mutex);
+                if (s->reads.size() >= 128) s->reads.clear();
+                s->reads.insert_or_assign(key, result);
+                const bool current = request.target == "currVFO" || (s->vfo && request.target == *s->vfo);
+                if (request.op == Op::GetFrequency && current) s->frequency = result.value;
+                if (request.op == Op::GetMode && current) s->mode = rig::RadioMode{result.name, result.width};
+                if (request.op == Op::GetVfo) {
+                    if (s->vfo && *s->vfo != result.name) { s->frequency.reset(); s->mode.reset(); s->reads.clear(); }
+                    s->vfo = result.name;
+                }
+            }
+            const auto value = std::to_string(result.value);
+            const auto width = std::to_string(result.width);
+            switch (request.op) {
+                case Op::GetFrequency: reply->fields = {{"Frequency", value}}; break;
+                case Op::GetMode: reply->fields = {{"Mode", result.name}, {"Passband", width}}; break;
+                case Op::GetVfo: reply->fields = {{"VFO", result.name}}; break;
+                case Op::GetVfoList: reply->fields = {{"VFOs", result.name}}; break;
+                case Op::GetSplitVfo: reply->fields = {{"Split", result.split ? "1" : "0"}, {"TX VFO", result.name}}; break;
+                case Op::GetSplitFrequency: reply->fields = {{"TX Frequency", value}}; break;
+                case Op::GetSplitMode: reply->fields = {{"TX Mode", result.name}, {"TX Passband", width}}; break;
+                case Op::GetSplitFrequencyMode: reply->fields = {{"TX Frequency", value}, {"TX Mode", result.name}, {"TX Passband", width}}; break;
+                case Op::GetLevel: reply->fields = {{"Level Value", result.floating_level ? value : std::to_string(static_cast<int>(result.value))}}; break;
+                default: break;
+            }
+
+        }, c->command.name == "set_ptt");
     } catch (const rig::RigError& e) {
         c->reply->error = e.code;
         if (c->socket) c->socket->write(format(c->command, *c->reply));

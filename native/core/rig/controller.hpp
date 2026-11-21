@@ -149,7 +149,9 @@ public:
     // Bounded non-PTT work on the same hardware worker. Completion is a future:
     // event-loop callers must poll it, never wait. PTT remains priority work.
     // Pending work is cancelled on stop; expired work never touches hardware.
-    std::future<void> request(std::function<void(RigBackend&)> command);
+    // External key/unkey and disconnect cleanup use priority=true: a separate
+    // bounded FIFO ahead of ordinary queries, below the modem's PTT slot.
+    std::future<void> request(std::function<void(RigBackend&)> command, bool priority = false);
 
     // A `rig::Keyer::Ptt`: set_ptt with the transmit interlock around it.
     // Polling pauses before the key and resumes after the unkey (even a

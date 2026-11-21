@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <limits>
 #include <sstream>
 #include <iomanip>
 #include <cmath>
@@ -184,6 +185,7 @@ public:
         if (rig_ == nullptr) return;
         if (open_) rig_close(rig_);
         open_ = false;
+        vfo_opt_ = false;
         rig_cleanup(rig_);
         rig_ = nullptr;
     }
@@ -223,43 +225,152 @@ public:
     void set_mode(const RadioMode& m) override {
         require_open();
         const rmode_t value = rig_parse_mode(m.name.c_str());
-        if (value != RIG_MODE_USB && value != RIG_MODE_LSB && value != RIG_MODE_PKTUSB)
-            throw RigError("facade supports USB, LSB and PKTUSB", -1);
+        if (value == RIG_MODE_NONE) throw RigError("unknown mode", -1);
         const int rc = rig_set_mode(rig_, RIG_VFO_CURR, value, m.width);
         if (rc != RIG_OK) throw RigError(hamlib_error("mode setting failed", rc), rc);
     }
 
+    RadioControl control(const RadioControl& command) override {
+        require_open();
+        auto result = command;
+        const vfo_t vfo = parse_vfo(command.target);
+        // NET's default wire syntax silently drops VFO arguments. Negotiate
+        // targeting on this connection before the first explicit target.
+        if (config_.model == MODEL_NET_RIGCTL && vfo != RIG_VFO_CURR && !vfo_opt_) {
+            const int status = rig_set_vfo_opt(rig_, 1);
+            if (status != RIG_OK) throw RigError(hamlib_error("VFO targeting unavailable", status), status);
+            vfo_opt_ = true;
+        }
+        int rc = RIG_OK;
+        freq_t frequency = command.value;
+        rmode_t mode = RIG_MODE_NONE;
+        pbwidth_t width = command.width;
+        vfo_t tx = RIG_VFO_NONE;
+        split_t split = command.split ? RIG_SPLIT_ON : RIG_SPLIT_OFF;
+        const auto parse_mode = [&] {
+            const auto m = rig_parse_mode(command.name.c_str());
+            if (m == RIG_MODE_NONE) throw RigError("unknown mode", -1);
+            return m;
+        };
+        switch (command.op) {
+            case RadioOp::GetFrequency:
+                // Retain the existing idle NET reconnection behavior. An
+                // explicit target is never silently retried without its VFO
+                // negotiation on a freshly opened connection.
+                if (vfo == RIG_VFO_CURR) result.value = frequency_hz();
+                else { rc = rig_get_freq(rig_, vfo, &frequency); result.value = frequency; }
+                break;
+            case RadioOp::SetFrequency:
+                if (!std::isfinite(frequency) || frequency <= 0) throw RigError("invalid frequency", -1);
+                rc = rig_set_freq(rig_, vfo, frequency); break;
+            case RadioOp::GetMode:
+                rc = rig_get_mode(rig_, vfo, &mode, &width);
+                result.name = rig_strrmode(mode); result.width = width; break;
+            case RadioOp::SetMode: rc = rig_set_mode(rig_, vfo, parse_mode(), width); break;
+            case RadioOp::GetVfo:
+                rc = rig_get_vfo(rig_, &tx); result.name = rig_strvfo(tx); break;
+            case RadioOp::SetVfo: rc = rig_set_vfo(rig_, parse_vfo(command.name)); break;
+            case RadioOp::GetVfoList: {
+                char list[512] = {};
+                rc = rig_get_vfo_list(rig_, list, sizeof list); result.name = list; break;
+            }
+            case RadioOp::GetSplitVfo:
+                rc = rig_get_split_vfo(rig_, vfo, &split, &tx);
+                result.split = split == RIG_SPLIT_ON; result.name = rig_strvfo(tx); break;
+            case RadioOp::SetSplitVfo:
+                rc = rig_set_split_vfo(rig_, vfo, split, parse_vfo(command.name)); break;
+            case RadioOp::GetSplitFrequency:
+                rc = rig_get_split_freq(rig_, vfo, &frequency); result.value = frequency; break;
+            case RadioOp::SetSplitFrequency:
+                if (!std::isfinite(frequency) || frequency <= 0) throw RigError("invalid frequency", -1);
+                rc = rig_set_split_freq(rig_, vfo, frequency); break;
+            case RadioOp::GetSplitMode:
+                rc = rig_get_split_mode(rig_, vfo, &mode, &width);
+                result.name = rig_strrmode(mode); result.width = width; break;
+            case RadioOp::SetSplitMode: rc = rig_set_split_mode(rig_, vfo, parse_mode(), width); break;
+            case RadioOp::GetSplitFrequencyMode:
+                rc = rig_get_split_freq_mode(rig_, vfo, &frequency, &mode, &width);
+                result.value = frequency; result.name = rig_strrmode(mode); result.width = width; break;
+            case RadioOp::SetSplitFrequencyMode:
+                if (!std::isfinite(frequency) || frequency <= 0) throw RigError("invalid frequency", -1);
+                rc = rig_set_split_freq_mode(rig_, vfo, frequency, parse_mode(), width); break;
+            case RadioOp::GetLevel:
+            case RadioOp::SetLevel: {
+                const setting_t level = rig_parse_level(command.name.c_str());
+                const bool write = command.op == RadioOp::SetLevel;
+                if (!level || !(level & supported_levels) ||
+                    !(write ? rig_has_set_level(rig_, level) & RIG_LEVEL_SET(supported_levels)
+                            : rig_has_get_level(rig_, level)))
+                    throw RigError("level unavailable", -11);
+                value_t value = {};
+                if (write) {
+                    if (!std::isfinite(command.value)) throw RigError("invalid level", -1);
+                    if (RIG_LEVEL_IS_FLOAT(level)) {
+                        // All writable float levels in this declared subset are normalized.
+                        if (command.value < 0 || command.value > 1) throw RigError("level outside 0..1", -1);
+                        value.f = static_cast<float>(command.value);
+                    } else {
+                        if (command.value < std::numeric_limits<int>::min() || command.value > std::numeric_limits<int>::max() ||
+                            std::floor(command.value) != command.value) throw RigError("invalid integer level", -1);
+                        value.i = static_cast<int>(command.value);
+                    }
+                    rc = rig_set_level(rig_, vfo, level, value);
+                } else {
+                    rc = rig_get_level(rig_, vfo, level, &value);
+                    result.value = RIG_LEVEL_IS_FLOAT(level) ? value.f : value.i;
+                    result.floating_level = RIG_LEVEL_IS_FLOAT(level);
+                }
+                break;
+            }
+        }
+        if (rc != RIG_OK) throw RigError(hamlib_error("radio control failed", rc), rc);
+        return result;
+    }
+
     std::string rigctld_state() override {
         require_open();
-        // Serialize the documented NET rigctl protocol, using public rig_caps.
-        // Advertise only the current-VFO operations this facade implements.
+        // Public model metadata and runtime level/VFO queries only; do not
+        // dereference RIG (its pthread layout differs under the Windows shim).
         const rig_caps* caps = rig_get_caps(static_cast<rig_model_t>(config_.model));
         if (!caps) throw RigError("capabilities unavailable", -11);
-        constexpr rmode_t allowed = RIG_MODE_USB | RIG_MODE_LSB | RIG_MODE_PKTUSB;
-        rmode_t modes = 0;
-        for (const auto* list : {caps->rx_range_list1, caps->tx_range_list1})
-            for (int i = 0; i < HAMLIB_FRQRANGESIZ && list[i].endf != 0; ++i) modes |= list[i].modes & allowed;
         std::ostringstream out;
-        out << "1\n1\n2\n" << std::setprecision(15);
+        out << "1\n" << config_.model << "\n0\n" << std::setprecision(15);
         const auto ranges = [&](const freq_range_t* list) {
-            for (int i = 0; i < HAMLIB_FRQRANGESIZ && list[i].endf != 0; ++i) {
-                const auto mask = list[i].modes & modes;
-                if (!mask) continue;
-                out << list[i].startf << ' ' << list[i].endf << " 0x" << std::hex << mask << std::dec
-                    << ' ' << list[i].low_power << ' ' << list[i].high_power << " 1 0\n";
-            }
+            for (int i = 0; i < HAMLIB_FRQRANGESIZ && list[i].endf != 0; ++i)
+                out << list[i].startf << ' ' << list[i].endf << " 0x" << std::hex << list[i].modes << std::dec
+                    << ' ' << list[i].low_power << ' ' << list[i].high_power << " 0x" << std::hex
+                    << list[i].vfo << " 0x" << list[i].ant << std::dec << '\n';
             out << "0 0 0 0 0 0 0\n";
         };
         ranges(caps->rx_range_list1);
         ranges(caps->tx_range_list1);
-        out << "0x" << std::hex << modes << " 1\n0 0\n0x" << modes << " 2400\n0 0\n" << std::dec;
-        for (int i = 0; i < 12; ++i) out << "0\n";
-        out << "vfo_ops=0\nptt_type=1\nhas_get_vfo=1\nhas_set_vfo=0\n"
-            << "has_get_freq=" << bool(caps->get_freq) << "\nhas_set_freq=" << bool(caps->set_freq)
+        for (const auto& step : caps->tuning_steps) {
+            if (!step.modes) break;
+            out << "0x" << std::hex << step.modes << std::dec << ' ' << step.ts << '\n';
+        }
+        out << "0 0\n";
+        for (const auto& filter : caps->filters) {
+            if (!filter.modes) break;
+            out << "0x" << std::hex << filter.modes << std::dec << ' ' << filter.width << '\n';
+        }
+        out << "0 0\n0\n0\n0\n0\n";
+        for (const auto* list : {caps->preamp, caps->attenuator}) {
+            for (int i = 0; i < HAMLIB_MAXDBLSTSIZ && list[i]; ++i) out << list[i] << ' ';
+            out << '\n';
+        }
+        out << "0\n0\n0x" << std::hex << rig_has_get_level(rig_, supported_levels)
+            << "\n0x" << (rig_has_set_level(rig_, supported_levels) & RIG_LEVEL_SET(supported_levels))
+            << std::dec << "\n0\n0\n";
+        // The adapter accepts explicit targets and lets Hamlib emulate them
+        // on this worker when the physical backend cannot target natively.
+        out << "vfo_ops=0\nptt_type=1\ntargetable_vfo=" << (RIG_TARGETABLE_FREQ | RIG_TARGETABLE_MODE | RIG_TARGETABLE_LEVEL)
+            << "\nhas_get_vfo=" << bool(caps->get_vfo) << "\nhas_set_vfo=" << bool(caps->set_vfo)
+            << "\nhas_get_freq=" << bool(caps->get_freq) << "\nhas_set_freq=" << bool(caps->set_freq)
             << "\nhas_get_mode=" << bool(caps->get_mode) << "\nhas_set_mode=" << bool(caps->set_mode)
-            << "\nhas_get_split_vfo=0\nhas_set_split_vfo=0\nhas_get_split_freq=0\nhas_set_split_freq=0\n"
-            << "has_get_split_mode=0\nhas_set_split_mode=0\nhas_get_ant=0\nhas_set_ant=0\n"
-            << "has_get_conf=0\nhas_set_conf=0\nhas_power2mW=0\nhas_mW2power=0\ndone\n";
+            << "\nhas_get_split_vfo=" << bool(caps->get_split_vfo) << "\nhas_set_split_vfo=" << bool(caps->set_split_vfo)
+            << "\nhas_get_split_freq=" << bool(caps->get_split_freq) << "\nhas_set_split_freq=" << bool(caps->set_split_freq)
+            << "\nhas_get_split_mode=" << bool(caps->get_split_mode) << "\nhas_set_split_mode=" << bool(caps->set_split_mode)
+            << "\nhas_get_ant=0\nhas_set_ant=0\nhas_get_conf=0\nhas_set_conf=0\nhas_power2mW=0\nhas_mW2power=0\ndone\n";
         return out.str();
     }
 
@@ -278,6 +389,19 @@ public:
     }
 
 private:
+    static constexpr setting_t supported_levels = RIG_LEVEL_AF | RIG_LEVEL_RF | RIG_LEVEL_SQL |
+        RIG_LEVEL_RFPOWER | RIG_LEVEL_MICGAIN | RIG_LEVEL_COMP | RIG_LEVEL_AGC | RIG_LEVEL_ATT |
+        RIG_LEVEL_PREAMP | RIG_LEVEL_STRENGTH | RIG_LEVEL_RAWSTR | RIG_LEVEL_SWR | RIG_LEVEL_ALC |
+        RIG_LEVEL_CWPITCH | RIG_LEVEL_KEYSPD | RIG_LEVEL_IF | RIG_LEVEL_APF | RIG_LEVEL_NR |
+        RIG_LEVEL_NOTCHF | RIG_LEVEL_MONITOR_GAIN | RIG_LEVEL_BALANCE | RIG_LEVEL_RFPOWER_METER |
+        RIG_LEVEL_RFPOWER_METER_WATTS;
+
+    static vfo_t parse_vfo(const std::string& name) {
+        const vfo_t vfo = rig_parse_vfo(name.c_str());
+        if (vfo == RIG_VFO_NONE) throw RigError("unknown VFO", -1);
+        return vfo;
+    }
+
     // A rigctld can drop the connection between overs (seen with
     // kappanhang, polling off), and the next command finds the dead
     // socket: EOF on read, then EPIPE, both RIG_EIO. Reconnect and retry
@@ -385,6 +509,7 @@ private:
     std::string cm108_device_;  // PttMethod::Cm108: the hidraw device open() resolved
     RIG* rig_ = nullptr;
     bool open_ = false;
+    bool vfo_opt_ = false;
 };
 
 }  // namespace

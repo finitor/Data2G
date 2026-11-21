@@ -83,6 +83,7 @@ public:
     RadioMode mode() override { require_inner(); return inner_->mode(); }
     void set_mode(const RadioMode& m) override { require_inner(); inner_->set_mode(m); }
     std::string rigctld_state() override { require_inner(); return inner_->rigctld_state(); }
+    RadioControl control(const RadioControl& command) override { require_inner(); return inner_->control(command); }
 
     std::string description() const override {
         std::string text = inner_ ? inner_->description() : std::string("rig");

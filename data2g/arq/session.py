@@ -282,7 +282,15 @@ class Session:
         self._tx_mode = burst.submode
         if (self.master and self.state in (CONNECTING, CONNECTED)) or self.state == DISCONNECTING:
             wait = REPLY_START_S
-            if (self.state == CONNECTED and self.station is not None
+            tries = CONNECT_TRIES if self.connect_tries is None else self.connect_tries
+            if self.state == CONNECTING and self._tries + 1 >= tries:
+                # Earlier timeouts leave CONNECTING through the retry jitter;
+                # the last closes immediately. Allow its whole ACK even when
+                # the header is only found near the end of a weak burst.
+                cpb = self.policy.ctl_payload_bytes(burst.submode)
+                n_ack = -(-(4 + 2 + F.ConnectAck.BYTES) // cpb)
+                wait += self.policy.airtime(burst.submode, n_ack)
+            elif (self.state == CONNECTED and self.station is not None
                     and (hold := self.policy.reply_hold(self.station, burst)) is not None):
                 # a reply whose header I miss is still on air: don't poll over it
                 wait = max(wait, hold)

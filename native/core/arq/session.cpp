@@ -207,6 +207,14 @@ void Session::on_tx_end(const TxBurstPtr& burst, double now) {
     // only the caller retries (§6), and a callee's DISC
     if ((m && (state == SessionState::CONNECTING || state == SessionState::CONNECTED)) || state == SessionState::DISCONNECTING) {
         double wait = tune.reply_start_s;
+        if (state == SessionState::CONNECTING && tries + 1 >= tune.connect_tries && burst) {
+            // Earlier timeouts leave CONNECTING through the retry jitter;
+            // the last closes immediately. Allow its whole ACK even when
+            // the header is only found near the end of a weak burst.
+            const int cpb = policy->ctl_payload_bytes(burst->submode);
+            const int n_ack = (4 + 2 + ConnectAck::BYTES + cpb - 1) / cpb;
+            wait += policy->airtime(burst->submode, n_ack, false);
+        }
         // a reply whose header I miss is still on air: don't poll over it
         if (state == SessionState::CONNECTED && station && burst)
             if (auto hold = policy->reply_hold(*station, *burst)) wait = std::max(wait, *hold);

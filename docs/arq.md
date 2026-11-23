@@ -688,6 +688,12 @@ characters plus SSID, space padded at the end (a space inside a name is kept).
 | DISC / DISC_ACK | graceful close; DISC is retried 3 times |
 
 CONNECT retries: 5 tries, 3-5 s apart with jitter, then fail to the host.
+A final CONNECT allows one complete CONNECT_ACK in the request's mode,
+in addition to the usual turnaround and reply-start allowance, before
+reporting no answer. A weak reply's header may only be found near its end;
+earlier timeouts leave the caller connecting through the retry jitter, but
+the final timeout closes it immediately. The extra no-answer wait is bounded
+by that ACK's airtime; neither the number of tries nor earlier timers change.
 A CONNECT_NAK ends them at once: the caller closes with `refused: <reason>`.
 
 A CONNECT addressed to a station is decoded in every state, so it is always

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "arq/session.hpp"
+#include "arq/policy.hpp"
 #include "check.hpp"
 
 using namespace data2g;
@@ -174,6 +175,38 @@ void sessions(unsigned seed, double p_burst) {
     check::equal(b.events.front(), std::string("CONNECTED W1AW"), "callee's CONNECTED");
 }
 
+void final_connect_reply() {
+    for (bool heard : {false, true}) {
+        auto policy = std::make_shared<GearPolicy>();
+        Session a("W1AW", policy);
+        a.tune.connect_tries = 2;
+        a.connect("K2XYZ", 2, 0.0);
+        a.on_tx_end(a.poll(0), 0);
+        a.poll(*a.next_event());
+        const double end = *a.next_event();
+        auto request = a.poll(end);
+        a.on_tx_end(request, end);
+        check::close(std::vector{*a.next_event() - end}, std::vector{8.48}, 1e-9, "final robust ACK allowance");
+        a.poll(end + 3.5);
+        check::is_true(a.state == SessionState::CONNECTING, "last CONNECT still waits past short deadline");
+        if (heard) {
+            std::mt19937 rng(1);
+            Session b("K2XYZ", std::make_shared<GearPolicy>());
+            b.listen();
+            FakeRx connect(*request, rng, 0);
+            b.on_rx(connect, end);
+            auto ack = b.poll(end);
+            a.on_header(ack->submode, static_cast<int>(ack->slots.size()), end + 4.34);
+            FakeRx reply(*ack, rng, 0);
+            a.on_rx(reply, end + 5.24);
+            check::is_true(a.state == SessionState::CONNECTED, "late valid ACK establishes native session");
+        } else {
+            a.poll(*a.next_event());
+            check::is_true(a.state == SessionState::CLOSED && a.close_reason == "NO_ANSWER", "absent ACK still ends dial");
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -209,5 +242,6 @@ int main() {
 
     for (unsigned seed = 0; seed < 12; ++seed) stations(seed, (seed % 3) * 0.1, (seed / 3 % 3) * 0.1);
     for (unsigned seed = 0; seed < 6; ++seed) sessions(seed, (seed % 3) * 0.05);
+    final_connect_reply();
     return check::report("arq");
 }

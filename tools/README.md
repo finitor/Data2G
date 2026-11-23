@@ -16,6 +16,7 @@ Each file's header has its usage.
 | `with_native.py` | Run a study script with the C++ core substituted, as `pytest --native` does (`tests/native_subs/`); `--skip arq,gear` leaves areas in Python. |
 | `bench_native.py` | Timings of the C++ hot paths per pool size (run under `with_native.py`). |
 | `sample_threads.py` | Sample a running process's threads: state, wait channel, CPU. |
+| `session_probe.py` | One connected session between two running stations over their VARA-style ports, data timed each way; an Android TNC through `adb forward`. |
 | **Packaging** | |
 | `package_app.sh` | Stage a runnable copy of the native apps with Qt. |
 | `make_installer.sh` | Wrap the staged tree: .dmg, AppImage, NSIS installer. |

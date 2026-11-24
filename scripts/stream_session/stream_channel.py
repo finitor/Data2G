@@ -19,7 +19,10 @@ sys.path[:0] = [str(D2G), str(D2G / "scripts")]
 from phy_session import ContinuousChannel
 
 FS, BLOCK, POWER, HORIZON = 48000, 480, 0.01, 240.0
-CARRIER_HZ, CARRIER_INR_DB = 1573.4, 12.0  # the interfering tone: its (mean) power over the noise in 50 Hz
+# The interfering tone: its (mean) power over the noise in 50 Hz, as data2g.interference's
+# Qrm("carrier", ...) defines one (CARRIER_REF_HZ). Generated here, not rendered by that module:
+# it runs at the modem's 8 kHz, and this tone's phase and seeds are what the recorded studies used.
+CARRIER_HZ, CARRIER_INR_DB = 1573.4, 12.0
 
 
 class StreamingChannel:

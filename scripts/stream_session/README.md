@@ -46,6 +46,11 @@ against a mean transmitted power of 0.01; +4.5 Hz CFO each way.
 | `carrier` | 1 Hz | 2 ms | −6 dB | steady 1573.4 Hz tone, +12 dB over the noise in 50 Hz |
 | `carrier-fade1`, `carrier-fade10` | 1 Hz | 2 ms | −6 dB | the same tone, Rayleigh fading at 1 or 10 Hz, +12 dB mean |
 
+The carrier's level is defined as `data2g.interference`'s `Qrm("carrier")`
+is (power over the floor in 50 Hz). It is generated in `stream_channel.py`
+at 48 kHz with the seeds the recorded studies used, so their trials replay
+exactly; the other interference kinds of that module are not wired in.
+
 ## Accounting
 
 The caller dials at 0.5 s. Each station queues its seeded random message

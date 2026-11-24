@@ -77,10 +77,10 @@ log = logging.getLogger("data2g.session")
 # EXPERIMENT (study/robust-start-gate): how a session whose connect was made by a robust retry starts.
 # Read once from the environment so one checkout gives every arm of the study (Session._robust_start).
 import os as _os
-ROBUST_START = _os.environ.get("DATA2G_ROBUST_START", "off")  # off | on | gate
+ROBUST_START = _os.environ.get("DATA2G_ROBUST_START", "off")  # off | on | gate | caller | both
 ROBUST_START_SNR_DB = float(_os.environ.get("DATA2G_ROBUST_START_SNR_DB", "inf"))
 ROBUST_START_SPREAD_HZ = float(_os.environ.get("DATA2G_ROBUST_START_SPREAD_HZ", "inf"))
-assert ROBUST_START in ("off", "on", "gate"), ROBUST_START
+assert ROBUST_START in ("off", "on", "gate", "caller", "both"), ROBUST_START
 
 IDLE, LISTEN, CONNECTING, CONNECTED, DISCONNECTING, CLOSED = (
     "idle", "listen", "connecting", "connected", "disconnecting", "closed")
@@ -344,6 +344,14 @@ class Session:
         undrained, limbo = len(st.rx.out), st.tx.limbo is not None
         if not st.handle(rx):
             return  # not ours, or unreadable: stay silent (§3)
+        if getattr(self, "_follow_start", False):
+            # EXPERIMENT (ROBUST_START caller): the callee takes the caller's decision from its first burst's mode
+            from .policy import ROBUST_MODES
+            self._follow_start = False
+            follows = rx.submode in ROBUST_MODES
+            log.info("robust start (caller): first burst %s -> %s", rx.submode, "robust floor" if follows else "bottom")
+            if follows:
+                st.esc_floor = L.MAX_ESCALATION
         self._heard(now)
         if st.state == L.FAILED:
             self._close(f"LINK_FAILED {st.fail_reason}")
@@ -587,7 +595,7 @@ class Session:
             return {"key": key, "body": body, "mode": rx.submode} if body else None
         return self._primed_frame(rx)
 
-    def _robust_start(self, mode: str):
+    def _robust_start(self, mode: str, peer_bits: int = 0):
         """EXPERIMENT (study/robust-start-gate; Python only, native not updated).
 
         The connect frame that made this session came in a retry's robust
@@ -602,20 +610,46 @@ class Session:
                 and spread_est under ROBUST_START_SPREAD_HZ. Then the first
                 try was lost to something else (QRM, a scanning callee) and
                 the session starts as `off`.
-        Each side decides from the frame it received (the callee the CONNECT,
-        the caller the CONNECT_ACK); Engine.step has observed it into the
-        policy before on_rx. The reading and the decision are logged."""
+          caller  one decision for the session: the caller gates as in `gate`,
+                on the CONNECT_ACK it received; the callee does not decide and
+                follows the mode of the first burst it hears from the caller
+                (on_rx: a robust mode puts its floor at the top too). Nothing
+                on the wire changes.
+          both    as `caller`, with the callee's reading of the CONNECT in two
+                spare bits of the CONNECT_ACK's cap byte (64: SNR under the
+                bar, 128: spread at or over it; A WIRE CHANGE, experiment
+                only). The caller starts robust if either side read the SNR
+                weak, or both read the spread fast: one side's stray spread
+                reading (cpm.spread's ceiling on slow selective fading) is
+                outvoted, a path weak one way only is not.
+        In `on` and `gate` each side decides from the frame it received (the
+        callee the CONNECT, the caller the CONNECT_ACK); Engine.step has
+        observed it into the policy before on_rx. The reading and the
+        decision are logged."""
         first = self.policy.connect_mode(self.cap, 0)
         retries = {self.policy.connect_mode(self.cap, k) for k in range(1, CONNECT_TRIES + 1)}
         if mode == first or mode not in retries:
             return
         m = getattr(self.policy, "measured", None) or {}
         snr, spread = m.get("snr_est"), m.get("spread_est")
+        if ROBUST_START in ("caller", "both") and not self.station.master:
+            self._follow_start = True
+            if ROBUST_START == "both":
+                self._start_bits = ((snr is None or snr < ROBUST_START_SNR_DB)
+                                    | (spread is not None and spread >= ROBUST_START_SPREAD_HZ) << 1)
+            log.info("robust start (caller): connect frame %s, snr_est %s, spread_est %s -> follows the caller", mode,
+                     "none" if snr is None else f"{snr:.2f}", "none" if spread is None else f"{spread:.2f}")
+            return
         robust = ROBUST_START == "on"
-        if ROBUST_START == "gate":
+        if ROBUST_START in ("gate", "caller"):
             good = (snr is not None and snr >= ROBUST_START_SNR_DB
                     and (spread is None or spread < ROBUST_START_SPREAD_HZ))
             robust = not good
+        if ROBUST_START == "both":
+            weak = snr is None or snr < ROBUST_START_SNR_DB
+            fast = spread is not None and spread >= ROBUST_START_SPREAD_HZ
+            robust = weak or bool(peer_bits & 1) or (fast and bool(peer_bits & 2))
+            log.info("robust start (both): callee's bits %d (1 weak SNR, 2 fast spread)", peer_bits)
         log.info("robust start (%s): connect frame %s, snr_est %s, spread_est %s -> %s", ROBUST_START, mode,
                  "none" if snr is None else f"{snr:.2f}", "none" if spread is None else f"{spread:.2f}",
                  "robust floor" if robust else "bottom")
@@ -743,11 +777,12 @@ class Session:
             a = F.ConnectAck.unpack(body)
             if a.nonce != self._nonce:
                 return
-            self.cap = min(a.cap, self.cap)
+            peer_bits, acap = (a.cap >> 6, a.cap & 63) if ROBUST_START == "both" else (0, a.cap)
+            self.cap = min(acap, self.cap)
             self.peer_t_turn = a.t_turn10 / 10
             self.station = L.Station(0, self.policy, master=True, key=session_key(self.call, self.peer, self._nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
-            self._robust_start(f["mode"])
+            self._robust_start(f["mode"], peer_bits)
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {self.peer}")
@@ -774,7 +809,7 @@ class Session:
             self._queue(self._nak, now)
 
     def _accept_burst(self) -> B.TxBurst:
-        body = F.ConnectAck(self._nonce, self.cap, round(self.t_turn * 10)).pack()
+        body = F.ConnectAck(self._nonce, self.cap | getattr(self, "_start_bits", 0) << 6, round(self.t_turn * 10)).pack()
         return self._session_burst(1, 0, body, self._answer_mode)
 
     def _flush_writes(self):
@@ -799,7 +834,7 @@ def _check_frame(body: bytes) -> str | None:
             F.Connect.unpack(body)
         except ValueError as e:
             return f"{name}: {e}"
-    if body[0] == F.CONNECT_ACK and (cap := F.ConnectAck.unpack(body).cap) > 2:
+    if body[0] == F.CONNECT_ACK and (cap := F.ConnectAck.unpack(body).cap & (63 if ROBUST_START == "both" else 255)) > 2:
         return f"{name}: cap code {cap}"
     return None
 

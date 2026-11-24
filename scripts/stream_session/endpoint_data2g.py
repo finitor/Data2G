@@ -25,7 +25,17 @@ assert native is not None, why
 assert Path(native.__file__).resolve().is_relative_to(D2G), native.__file__
 assert native.__profile__ == "hf", native.__profile__
 native.set_threads(1)
+from data2g import cpm as _cpm
+_py_measure = _cpm.measure
+from data2g.arq import phy as _phy
+_py_phy_measure = _phy.measure
 native_subs.apply(native_subs.build(native, skip={"arq", "gear", "engine", "host"}))
+if os.environ.get("DATA2G_PY_MEASURE") == "1":
+    # EXPERIMENT (study/robust-start-gate): a CPM burst's measurements from the Python phy.measure and
+    # cpm.measure, where cpm.SPREAD_NEAR lives (native not ported); OFDM bursts stay native
+    _cpm.measure = _py_measure
+    _native_phy_measure = _phy.measure
+    _phy.measure = lambda r: _py_phy_measure(r) if r.get("family") == "cpm" else _native_phy_measure(r)
 from data2g.arq import engine as E, session as S, phy as PHY
 PHY.DD_BUDGET_S = float("inf")  # simulated samples, no wall-clock CPU deadline model
 LOG = bool(os.environ.get("STREAM_SESSION_LOG"))

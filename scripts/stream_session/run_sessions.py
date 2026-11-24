@@ -126,15 +126,17 @@ def main():
     p.add_argument("--trials", type=int, default=1)
     p.add_argument("--seed", type=int, default=123000)
     p.add_argument("--bytes", type=int, default=64)
+    p.add_argument("--horizon", type=float, default=180, help="seconds a trial has to complete")
     p.add_argument("--directory", type=Path, required=True)
     a = p.parse_args()
+    a.directory.mkdir(parents=True, exist_ok=True)
     with (a.directory.parent/(a.directory.name+".jsonl")).open("a") as f:
         for point in POINTS:
             if point[0] not in a.points.split(","):
                 continue
             for seed in range(a.seed, a.seed+a.trials):
                 for modem in a.modems.split(","):
-                    row = run(modem, point, seed, a.directory, nbytes=a.bytes)
+                    row = run(modem, point, seed, a.directory, horizon=a.horizon, nbytes=a.bytes)
                     f.write(json.dumps(row)+"\n")
                     f.flush()
                     print(json.dumps({k: row[k] for k in ["modem", "point", "seed", "complete", "acknowledged_at", "delivered", "wall_s"]}), flush=True)

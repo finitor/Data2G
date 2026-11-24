@@ -74,6 +74,14 @@ REPLY_HOLD_S = 0.25
 
 log = logging.getLogger("data2g.session")
 
+# EXPERIMENT (study/robust-start-gate): how a session whose connect was made by a robust retry starts.
+# Read once from the environment so one checkout gives every arm of the study (Session._robust_start).
+import os as _os
+ROBUST_START = _os.environ.get("DATA2G_ROBUST_START", "off")  # off | on | gate
+ROBUST_START_SNR_DB = float(_os.environ.get("DATA2G_ROBUST_START_SNR_DB", "inf"))
+ROBUST_START_SPREAD_HZ = float(_os.environ.get("DATA2G_ROBUST_START_SPREAD_HZ", "inf"))
+assert ROBUST_START in ("off", "on", "gate"), ROBUST_START
+
 IDLE, LISTEN, CONNECTING, CONNECTED, DISCONNECTING, CLOSED = (
     "idle", "listen", "connecting", "connected", "disconnecting", "closed")
 # CONNECT_NAK reasons: the caller stops dialing on any of them
@@ -579,6 +587,41 @@ class Session:
             return {"key": key, "body": body, "mode": rx.submode} if body else None
         return self._primed_frame(rx)
 
+    def _robust_start(self, mode: str):
+        """EXPERIMENT (study/robust-start-gate; Python only, native not updated).
+
+        The connect frame that made this session came in a retry's robust
+        mode, so the cap's connect mode did not get through. ROBUST_START:
+          off   as master: the session starts at the bottom of the escalation
+                floor, its first bursts in the OFDM fallback.
+          on    feature/robust-start (issue 285): the station starts at the
+                top of the floor, control-only bursts in the robust mode from
+                the first turn; the floor decays as any does.
+          gate  as `on`, unless this side's measurement of that connect frame
+                says the path is good: snr_est at least ROBUST_START_SNR_DB
+                and spread_est under ROBUST_START_SPREAD_HZ. Then the first
+                try was lost to something else (QRM, a scanning callee) and
+                the session starts as `off`.
+        Each side decides from the frame it received (the callee the CONNECT,
+        the caller the CONNECT_ACK); Engine.step has observed it into the
+        policy before on_rx. The reading and the decision are logged."""
+        first = self.policy.connect_mode(self.cap, 0)
+        retries = {self.policy.connect_mode(self.cap, k) for k in range(1, CONNECT_TRIES + 1)}
+        if mode == first or mode not in retries:
+            return
+        m = getattr(self.policy, "measured", None) or {}
+        snr, spread = m.get("snr_est"), m.get("spread_est")
+        robust = ROBUST_START == "on"
+        if ROBUST_START == "gate":
+            good = (snr is not None and snr >= ROBUST_START_SNR_DB
+                    and (spread is None or spread < ROBUST_START_SPREAD_HZ))
+            robust = not good
+        log.info("robust start (%s): connect frame %s, snr_est %s, spread_est %s -> %s", ROBUST_START, mode,
+                 "none" if snr is None else f"{snr:.2f}", "none" if spread is None else f"{spread:.2f}",
+                 "robust floor" if robust else "bottom")
+        if robust:
+            self.station.esc_floor = L.MAX_ESCALATION
+
     def _primed_frame(self, rx) -> dict | None:
         """A connect frame that failed blind, retried primed (docs/arq.md §3a):
         the caller knows nearly all of its CONNECT_ACK (the nonce it sent, its
@@ -690,6 +733,7 @@ class Session:
             self.peer_t_turn = c.t_turn10 / 10
             self.station = L.Station(1, self.policy, master=False, key=session_key(caller, self.call, nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
+            self._robust_start(f["mode"])
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {caller}")
@@ -703,6 +747,7 @@ class Session:
             self.peer_t_turn = a.t_turn10 / 10
             self.station = L.Station(0, self.policy, master=True, key=session_key(self.call, self.peer, self._nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
+            self._robust_start(f["mode"])
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {self.peer}")

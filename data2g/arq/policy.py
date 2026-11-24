@@ -110,6 +110,10 @@ CONNECT = {0: "n10-qpsk-r1/3", 1: "qpsk-r1/5", 2: "qpsk-r1/5"}  # >= 28 B payloa
 # and mpd, so it alternates with the reply mode (1, 3)
 # FM has no n4 and no CPM (plan Q2): its 500 Hz rungs stand in
 ALT_POLL = "n10-ack-4f" if PROFILE == "fm" else "n4-ack-8f"
+# EXPERIMENT (study/robust-start-gate, Python only): session.ROBUST_START's switch, read here too so
+# that with it off GearShifter.choose is master's.
+import os as _os
+_ROBUST_START = _os.environ.get("DATA2G_ROBUST_START", "off")
 ROBUST_ESCALATION = 4  # from here on ROBUST_CONNECT (link caps escalation at 4)
 ROBUST_CONNECT = "n10-qpsk-r1/5" if PROFILE == "fm" else "fsk16r25-r1/2"  # session-frame retries: 500 Hz, within every cap; CONNECT goes compact (20 B)
 # In a session, the robust mode on fast fading (robust_mode()): the peer's last
@@ -365,6 +369,10 @@ class GearShifter(L.Policy):
             reply = decode(st.peer_reply_recommend) if st.peer_reply_recommend is not None else None
             return (reply if reply and MODES[reply] in allowed(cap) else FALLBACK[cap]), 2
         if rec is None:
+            if _ROBUST_START != "off" and st.esc_floor >= ROBUST_ESCALATION:
+                # nothing recommended yet and my floor is the robust mode (a session
+                # that connected in it, session._robust_start): control only, in it
+                return self.robust_mode(), 1
             return FALLBACK[cap], 2
         mode = decode(rec)
         if mode is None or MODES[mode] not in allowed(cap):

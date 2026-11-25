@@ -37,10 +37,14 @@ way unless a point says otherwise.
 
 SNR is in 2500 Hz against the bursts' mean power: every burst is sent at a
 mean power of 0.01, so this is `hfchannel.awgn`'s definition, the one the
-test suite uses. Studies that set `DATA2G_PEP_REF_DB=5` measure against each
-burst's peak less 5 dB instead: the same number for a burst with a 5 dB
-peak-to-average ratio (OFDM, roughly), up to 5 dB easier for constant-envelope
-CPM/FSK.
+test suite uses. It is not the PEP-fair convention that upstream's AGENTS.md (#319) section 11
+asks studies on `ContinuousChannel` to use (`DATA2G_PEP_REF_DB=5`: noise
+against each burst's peak less 5 dB). Data2G's clipped bursts sit well under
+5 dB peak-to-average (`phy.peak_db`): OFDM 2.4-2.9 dB (w48 about 4), CPM/FSK
+about 0.1. So a PEP-5 cell of the same number is easier for every mode: 2.1-2.6
+dB for OFDM, 1.0 for w48, 4.8-4.9 for CPM/FSK. Results from this harness are
+not on the PEP scale and do not compare directly with loss-study cells or ladder
+scores.
 
 `run_sessions.POINTS` lists every point. The groups:
 

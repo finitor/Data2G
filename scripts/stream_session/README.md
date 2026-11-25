@@ -32,24 +32,41 @@ python scripts/stream_session/run_sessions.py --points carrier,hilat --trials 8 
 
 Two equal-power Rayleigh paths with the stated delay and Gaussian Doppler
 spread (the generator's two-sigma convention), continuous across bursts and
-reciprocal; independent continuous noise at each receiver; SNR in 2500 Hz
-against a mean transmitted power of 0.01; +4.5 Hz CFO each way.
+reciprocal; independent continuous noise at each receiver; +4.5 Hz CFO each
+way unless a point says otherwise.
 
-| Point | Doppler | Delay | SNR | Carrier |
-|---|---:|---:|---:|---|
-| `clean` | – | – | +20 dB | – |
-| `awgn-12`, `-14`, `-15`, `-16` | – | – | −12 to −16 dB | – |
-| `poor` | 1 Hz | 2 ms | −8 dB | – |
-| `nvis` | 1 Hz | 7 ms | −8 dB | – |
-| `flutter` | 10 Hz | 7 ms | 0 dB | – |
-| `hilat` | 30 Hz | 7 ms | 0 dB | – |
-| `carrier` | 1 Hz | 2 ms | −6 dB | steady 1573.4 Hz tone, +12 dB over the noise in 50 Hz |
-| `carrier-fade1`, `carrier-fade10` | 1 Hz | 2 ms | −6 dB | the same tone, Rayleigh fading at 1 or 10 Hz, +12 dB mean |
+SNR is in 2500 Hz against the bursts' mean power: every burst is sent at a
+mean power of 0.01, so this is `hfchannel.awgn`'s definition, the one the
+test suite uses. Studies that set `DATA2G_PEP_REF_DB=5` measure against each
+burst's peak less 5 dB instead: the same number for a burst with a 5 dB
+peak-to-average ratio (OFDM, roughly), up to 5 dB easier for constant-envelope
+CPM/FSK.
 
-The carrier's level is defined as `data2g.interference`'s `Qrm("carrier")`
-is (power over the floor in 50 Hz). It is generated in `stream_channel.py`
-at 48 kHz with the seeds the recorded studies used, so their trials replay
-exactly; the other interference kinds of that module are not wired in.
+`run_sessions.POINTS` lists every point. The groups:
+
+| Group | Points |
+|---|---|
+| The session matrix | `clean` (+20), `awgn-12` to `-16`, `poor` (1 Hz, 2 ms, −8), `nvis` (1, 7, −8), `flutter` (10, 7, 0), `hilat` (30, 7, 0), `carrier`, `carrier-fade1`, `carrier-fade10` (1, 2, −6, with the tone below), `qrm-noise` |
+| The robust-start gate study's grid | `awgn+10`, `+5`, `+0`, `-4`, `-8`; `mpp+2`, `-2`, `-6`, `-10`; `nvis-10` |
+| `fast-fading-integration`'s smoke cells, at this SNR | `hilat+10`, `hilat-m+10`, `hilat-m+20` (10, 3), `lowlat-d+10` (10, 6), `nvis+10`, `mpd+0` (2, 4), `mpp+0`, `mpg-4` (0.1, 0.5), `awgn-18`, `awgn-12+carrier`; 500 Hz cap: `cap500-mpd+0`, `cap500-mpp+0`, `cap500-awgn-12` |
+| Interference (`data2g.interference` presets, on 1 Hz / 2 ms at +2 dB) | `imp`, `imp-long`, `qrm-fsk` (`mid`), `qrm-edge`, `qrm-carriers`, `qrm-wide` |
+| Clocks and tuning | `clock-awgn-12`, `clock-poor` (sample clocks 100 ppm apart), `cfo25-poor` (25 Hz offset), `drift-poor` (+0.1 Hz/s from 4.5 Hz) |
+
+The carriers (`carrier`, `awgn-12+carrier`): a 1573.4 Hz tone, +12 dB over
+the noise in 50 Hz, as `data2g.interference`'s `Qrm("carrier")` defines a
+level, generated in `stream_channel.py` with the seeds the recorded studies
+used. `qrm-noise`: band noise on 1500 Hz, 500 Hz wide, +20 dB over the floor
+in its band, episodes of mean 3 s on 30% of the time, at both receivers
+(`run_gate.py`'s, the same seeds). The other interference points render that
+module's presets the same way. Their levels are over the floor, so they do
+not move with the SNR.
+
+A point's options (its sixth element): `cap` (the session's bandwidth cap
+code: 0 is 500 Hz, 2 none), and `StreamingChannel`'s `cfo`, `cfo_rate`, `ppm`
+and `qrm`. With `ppm`, the faster clock's received audio is read ahead of the
+samples sent, so that path starts with a propagation delay of
+ppm × 240 s (24 ms at 100 ppm), which shrinks to zero; the other path's grows
+from zero.
 
 ## Accounting
 
@@ -62,8 +79,8 @@ counted. Wrong delivered bytes abort the trial.
 
 ## Limits
 
-- Each transmitted burst is rescaled to a mean power of 0.01 (an equal mean power comparison, not equal PEP).
+- Each transmitted burst is rescaled to a mean power of 0.01 (an equal mean power comparison, not equal PEP: see Channel points).
 - The decision-directed decoder has no wall-clock budget, so real-time decoder deadlines are not modelled.
-- No AGC, clipping, radio passband, sample-clock error or independent forward/reverse fading.
+- No AGC, clipping, radio passband or independent forward/reverse fading. Sample-clock error only in the clock points.
 - Python Engine, ARQ and policy with native DSP: the native Engine and host are not exercised.
 - Trials are deterministic for a given seed, channel checkout, modem checkout and native build.

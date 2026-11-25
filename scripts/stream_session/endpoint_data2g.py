@@ -92,6 +92,7 @@ class Resampler:
 def main():
     seed = int(sys.argv[1])
     payload = [Path(p).read_bytes() for p in sys.argv[2:4]]
+    cap = int(sys.argv[4]) if len(sys.argv) > 4 else 2  # the session's bandwidth cap code
     st = [Engine("W1AW", seed=seed+1), Engine("K2XYZ", seed=seed+2)]
     st[1].listen()
     if LOG:
@@ -104,7 +105,7 @@ def main():
         assert len(raw) == 8+2*BLOCK*8
         cmd, = struct.unpack("<Q", raw[:8])
         if cmd == 2:
-            st[0].connect("K2XYZ", 2)
+            st[0].connect("K2XYZ", cap)
         elif cmd == 1:
             st[0].session.disconnect()
         inputs = np.frombuffer(raw[8:], dtype="<f8").reshape(2, BLOCK)

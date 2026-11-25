@@ -20,8 +20,13 @@ import numpy as np
 from stream_channel import StreamingChannel, BLOCK, FS
 
 HERE = Path(__file__).resolve().parent
-# (name, Doppler spread Hz, delay ms, SNR dB in 2500 Hz, carrier: False, True (steady) or its own Doppler spread Hz)
+# (name, Doppler spread Hz, delay ms, SNR dB in 2500 Hz, carrier: False, True (steady) or its own Doppler
+# spread Hz[, options]). SNR: against the bursts' mean power (hfchannel.awgn's, the test suite's). Options:
+# stream_channel.StreamingChannel's (cfo, cfo_rate, ppm, qrm) and cap, the session's bandwidth cap code
+# (0: 500 Hz, 1: 1200, 2: none; default 2).
+QRM_NOISE = ("noise", 1500.0, 500.0, 20.0, 3.0, 0.3)  # run_gate.py's qrm-noise: 30% of the time, mean 3 s
 POINTS = [
+    # the session matrix
     ("clean", 0, 0, 20, False),
     ("awgn-12", 0, 0, -12, False),
     ("awgn-14", 0, 0, -14, False),
@@ -34,6 +39,44 @@ POINTS = [
     ("carrier", 1, 2, -6, True),
     ("carrier-fade1", 1, 2, -6, 1.0),
     ("carrier-fade10", 1, 2, -6, 10.0),
+    ("qrm-noise", 1, 2, 2, False, dict(qrm=QRM_NOISE)),
+    # the robust-start gate study's grid (awgn+20 is clean, mpp-8 poor, nvis-8 nvis)
+    ("awgn+10", 0, 0, 10, False),
+    ("awgn+5", 0, 0, 5, False),
+    ("awgn+0", 0, 0, 0, False),
+    ("awgn-4", 0, 0, -4, False),
+    ("awgn-8", 0, 0, -8, False),
+    ("mpp+2", 1, 2, 2, False),
+    ("mpp-2", 1, 2, -2, False),
+    ("mpp-6", 1, 2, -6, False),
+    ("mpp-10", 1, 2, -10, False),
+    ("nvis-10", 1, 7, -10, False),
+    # fast-fading-integration's smoke loss study (ITU-R F.1487 / hfchannel presets), at our SNR
+    ("hilat+10", 30, 7, 10, False),
+    ("hilat-m+10", 10, 3, 10, False),
+    ("hilat-m+20", 10, 3, 20, False),
+    ("lowlat-d+10", 10, 6, 10, False),
+    ("nvis+10", 1, 7, 10, False),
+    ("mpd+0", 2, 4, 0, False),
+    ("mpp+0", 1, 2, 0, False),
+    ("mpg-4", 0.1, 0.5, -4, False),
+    ("awgn-18", 0, 0, -18, False),
+    ("awgn-12+carrier", 0, 0, -12, True),
+    ("cap500-mpd+0", 2, 4, 0, False, dict(cap=0)),
+    ("cap500-mpp+0", 1, 2, 0, False, dict(cap=0)),
+    ("cap500-awgn-12", 0, 0, -12, False, dict(cap=0)),
+    # conditions neither suite covered: data2g.interference presets on poor fading at +2 dB, as qrm-noise
+    ("imp", 1, 2, 2, False, dict(qrm="imp")),
+    ("imp-long", 1, 2, 2, False, dict(qrm="imp_long")),
+    ("qrm-fsk", 1, 2, 2, False, dict(qrm="mid")),
+    ("qrm-edge", 1, 2, 2, False, dict(qrm="edge")),
+    ("qrm-carriers", 1, 2, 2, False, dict(qrm="carriers")),
+    ("qrm-wide", 1, 2, 2, False, dict(qrm="qrm_wide")),
+    # sample clocks 100 ppm apart; frequency offset and drift
+    ("clock-awgn-12", 0, 0, -12, False, dict(ppm=100.0)),
+    ("clock-poor", 1, 2, -8, False, dict(ppm=100.0)),
+    ("cfo25-poor", 1, 2, -8, False, dict(cfo=25.0)),
+    ("drift-poor", 1, 2, -8, False, dict(cfo_rate=0.1)),
 ]
 
 
@@ -50,7 +93,9 @@ def read_exact(pipe, n):
 
 def run(modem, point, seed, directory, horizon=180, nbytes=64):
     directory.mkdir(parents=True, exist_ok=True)
-    name, dop, delay, snr, car = point
+    name, dop, delay, snr, car, *rest = point
+    opts = dict(rest[0]) if rest else {}
+    cap = opts.pop("cap", 2)
     stem = f"{modem}-{name}-{seed}"
     payload = [directory/f"{stem}-{i}.bin" for i in range(2)]
     for i, path in enumerate(payload):
@@ -58,7 +103,7 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
     assert modem == "data2g", modem  # the one endpoint here; another speaks the same pipe protocol
     args = [sys.executable, str(HERE/"endpoint_data2g.py")]
     logpath = directory/f"{stem}.log"
-    ch = StreamingChannel(dop, delay, snr, seed, car)
+    ch = StreamingChannel(dop, delay, snr, seed, car, horizon=horizon, **opts)
     inputs = np.zeros((2, BLOCK))
     connection = [None, None]
     delivered_at = None
@@ -72,7 +117,7 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
     last = None
     events = []
     with logpath.open("w") as log:
-        proc = subprocess.Popen(args+[str(seed), *map(str, payload)], stdin=subprocess.PIPE,
+        proc = subprocess.Popen(args+[str(seed), *map(str, payload), str(cap)], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=log)
         try:
             while samples/FS < (horizon if acknowledged_at is None else acknowledged_at+60):

@@ -26,6 +26,7 @@ python scripts/stream_session/run_sessions.py --points carrier,hilat --trials 8 
 
 - `STREAM_SESSION_MODEM`: the Data2G checkout the stations run (default: this one).
 - `STREAM_SESSION_CHANNEL`: the Data2G checkout the channel generator comes from (default: this one). Pin it to one revision to compare modem revisions on identical channels.
+- `STREAM_SESSION_XARA`: the binary for `--modems xara`, a Xara comparison adapter speaking the same pipe protocol (seed, two payload files, cap; cap 0 selects Xara's 500 Hz bandwidth). Under `DATA2G_PEP_REF_DB` the harness sets `XARA_PEAK_FULL_SCALE=1`, which a study-patched adapter takes as every burst at sample peak 1.0; unset, it sends at mean power 0.01.
 - `STREAM_SESSION_LOG=1`: the modem's own log lines, and each station's receiver, CW-sense and timer state whenever it changes, in the trial's log.
 
 ## Channel points

@@ -101,8 +101,18 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
     payload = [directory/f"{stem}-{i}.bin" for i in range(2)]
     for i, path in enumerate(payload):
         path.write_bytes(np.random.default_rng(np.random.SeedSequence([seed, 1, i])).bytes(nbytes))
-    assert modem == "data2g", modem  # the one endpoint here; another speaks the same pipe protocol
-    args = [sys.executable, str(HERE/"endpoint_data2g.py")]
+    env = None
+    if modem == "data2g":
+        args = [sys.executable, str(HERE/"endpoint_data2g.py")]
+    else:
+        # Another modem speaking the same pipe protocol (args: seed, two payloads, cap), e.g. the
+        # 2026-11-23 Xara comparison adapter: STREAM_SESSION_XARA names its binary. Under PEP-fair SNR
+        # it is told to send every burst at peak 1.0 (XARA_PEAK_FULL_SCALE); otherwise it sends at mean 0.01.
+        assert modem == "xara", modem
+        args = [os.environ["STREAM_SESSION_XARA"]]
+        env = dict(os.environ, **({"XARA_PEAK_FULL_SCALE": "1"} if PEP_REF_DB is not None else {}))
+        if PEP_REF_DB is None:
+            env.pop("XARA_PEAK_FULL_SCALE", None)
     logpath = directory/f"{stem}.log"
     ch = StreamingChannel(dop, delay, snr, seed, car, horizon=horizon, **opts)
     inputs = np.zeros((2, BLOCK))
@@ -119,7 +129,7 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
     events = []
     with logpath.open("w") as log:
         proc = subprocess.Popen(args+[str(seed), *map(str, payload), str(cap)], stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, stderr=log)
+                                stdout=subprocess.PIPE, stderr=log, env=env)
         try:
             while samples/FS < (horizon if acknowledged_at is None else acknowledged_at+60):
                 t = samples/FS

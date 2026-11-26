@@ -27,6 +27,7 @@ python scripts/stream_session/run_sessions.py --points carrier,hilat --trials 8 
 
 - `STREAM_SESSION_MODEM`: the Data2G checkout the stations run (default: this one).
 - `STREAM_SESSION_CHANNEL`: the Data2G checkout the channel generator comes from (default: this one). Pin it to one revision to compare modem revisions on identical channels.
+- `STREAM_SESSION_ION`: the binary for `--modems ion`, the Ion comparison adapter, on the same terms as Xara's below (`ION_PEAK_FULL_SCALE`, `ION_CPU`). Ion has one bandwidth, so the cap argument has no effect: cap500 cells run it uncapped.
 - `STREAM_SESSION_XARA`: the binary for `--modems xara`, a Xara comparison adapter speaking the same pipe protocol (seed, two payload files, cap; cap 0 selects Xara's 500 Hz bandwidth). Under `DATA2G_PEP_REF_DB` the harness sets `XARA_PEAK_FULL_SCALE=1`, which a study-patched adapter takes as every burst at sample peak 1.0; unset, it sends at mean power 0.01.
 - CPU: endpoints that write per-block CPU (`data2g-native`, and a Xara adapter built with the study's patch) get a `cpu` entry in each row: each station's modem and rate-conversion thread time, the whole process's, and the load in cores at real time, averaged over the session and over its busiest 1 s window (`peak`, `p95`). Single-threaded on this machine: scale by a measured factor for other hardware.
 - `STREAM_SESSION_LOG=1`: the modem's own log lines, and each station's receiver, CW-sense and timer state whenever it changes, in the trial's log.

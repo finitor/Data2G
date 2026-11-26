@@ -36,7 +36,9 @@ def main():
     seed = int(sys.argv[1])
     payload = [Path(p).read_bytes() for p in sys.argv[2:4]]
     cap = int(sys.argv[4]) if len(sys.argv) > 4 else 2  # the session's bandwidth cap code
-    st = [native.engine.Engine("W1AW", seed=seed+1), native.engine.Engine("K2XYZ", seed=seed+2)]
+    rec = os.environ.get("STREAM_SESSION_RECORD")  # a directory: each engine's own recording (events.jsonl)
+    st = [native.engine.Engine(c, seed=seed+k, **({"record_dir": f"{rec}/{c}"} if rec else {}))
+          for k, c in ((1, "W1AW"), (2, "K2XYZ"))]
     st[1].listen()
     # the native app's capture and playback rate conversion (native/core/audio/filters.hpp)
     down = [native.audio.Decimator(48000), native.audio.Decimator(48000)]

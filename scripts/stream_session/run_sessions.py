@@ -99,8 +99,8 @@ CPU_WINDOW_S = 1.0
 
 
 def cpu_metrics(path, elapsed):
-    """Per-station CPU from an endpoint's per-block file (endpoint_data2g_native.py, the Xara adapter's
-    XARA_CPU): five uint64 ns per 10 ms block, the stations' modem thread time, their rate conversion (Data2G
+    """Per-station CPU from an endpoint's per-block file (endpoint_data2g_native.py, the Xara and Ion
+    adapters' <MODEM>_CPU): five uint64 ns per 10 ms block, the stations' modem thread time, their rate conversion (Data2G
     only: 48 <-> 8 kHz through the app's native Decimator and Interpolator) and the whole process. A
     station's load counts its modem and rate conversion: audio in and out at 48 kHz, as Xara's process()
     takes it. Loads are in cores at real time: average over the
@@ -141,20 +141,23 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
         path.write_bytes(np.random.default_rng(np.random.SeedSequence([seed, 1, i])).bytes(nbytes))
     cpu_file = directory/f"{stem}.cpu"
     cpu_file.unlink(missing_ok=True)
-    env = dict(os.environ, STREAM_SESSION_CPU=str(cpu_file), XARA_CPU=str(cpu_file))
+    env = dict(os.environ, STREAM_SESSION_CPU=str(cpu_file))
     if modem == "data2g":
         args = [sys.executable, str(HERE/"endpoint_data2g.py")]
     elif modem == "data2g-native":
         args = [sys.executable, str(HERE/"endpoint_data2g_native.py")]
     else:
-        # Another modem speaking the same pipe protocol (args: seed, two payloads, cap), e.g. the
-        # 2026-11-23 Xara comparison adapter: STREAM_SESSION_XARA names its binary. Under PEP-fair SNR
-        # it is told to send every burst at peak 1.0 (XARA_PEAK_FULL_SCALE); otherwise it sends at mean 0.01.
-        assert modem == "xara", modem
-        args = [os.environ["STREAM_SESSION_XARA"]]
-        env.pop("XARA_PEAK_FULL_SCALE", None)
+        # Another modem speaking the same pipe protocol (args: seed, two payloads, cap): the 2026-11-23
+        # comparison adapters for Xara and Ion, whose binaries STREAM_SESSION_XARA and STREAM_SESSION_ION
+        # name. Under PEP-fair SNR a study-patched adapter is told to send every burst at peak 1.0
+        # (<MODEM>_PEAK_FULL_SCALE); otherwise it sends at mean 0.01. It writes per-block CPU to <MODEM>_CPU.
+        assert modem in ("xara", "ion"), modem
+        args = [os.environ[f"STREAM_SESSION_{modem.upper()}"]]
+        key = f"{modem.upper()}_PEAK_FULL_SCALE"
+        env.pop(key, None)
         if PEP_REF_DB is not None:
-            env["XARA_PEAK_FULL_SCALE"] = "1"
+            env[key] = "1"
+        env[f"{modem.upper()}_CPU"] = str(cpu_file)
     logpath = directory/f"{stem}.log"
     ch = StreamingChannel(dop, delay, snr, seed, car, horizon=horizon, **opts)
     inputs = np.zeros((2, BLOCK))

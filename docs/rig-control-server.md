@@ -100,6 +100,34 @@ GUI integrations share `rigctld/enabled`, `rigctld/listen`, and `rigctld/port`
 through `load_rig_server_settings` / `save_rig_server_settings`. Tool-specific
 paths are not part of those settings.
 
+## Watching client tuning
+
+Frequency changes log at INFO (the default) on stderr. Each request and
+result includes a connection-local client ID, normalized command and arguments.
+The result reports the Hamlib `RPRT` status, error reason on failure, and
+whether the response was queued to the client socket. For example:
+
+```text
+INFO rigctld client=1 request set_freq: 14075000
+INFO rigctld client=1 result set_freq: 14075000 RPRT 0 readback_hz=14075000.000000 reply=queued
+```
+
+`RPRT 0` means the backend call and existing readback completed successfully.
+The current-VFO setter includes that readback; explicitly targeted VFO and
+split writes do not add extra CAT reads. A successful backend acknowledgement
+alone is not proof that physical hardware tuned. `reply=queued` means the TCP
+socket accepted the response for sending, not that the client consumed it.
+Rejected requests log a negative `RPRT` and reason at WARNING.
+
+Start with `--log-level DEBUG` to also see frequency queries and their
+returned values, including split-frequency queries. INFO keeps polling quiet.
+Capture a live log with ordinary stderr redirection, for example:
+
+```sh
+native/build/data2g-rigctld --rig-model 1 --port 4532 2>rigctld.log
+tail -f rigctld.log
+```
+
 ## Compatibility and ownership
 
 The facade implements the operations below when the selected Hamlib backend

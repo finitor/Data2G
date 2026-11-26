@@ -15,11 +15,13 @@
 #include <vector>
 #include <thread>
 #include <memory>
+#include <mutex>
 #include <atomic>
 #include <string>
 
 #include "check.hpp"
 #include "app/rig_service.hpp"
+#include "app/log.hpp"
 #include "app/station.hpp"
 #include "rig/hamlib/hamlib.hpp"
 #include "rig/controller.hpp"
@@ -279,6 +281,39 @@ void net_client(app::RigService& service) {
     check::is_true(until([&] { try { service.reserve_modem(); return true; } catch (...) { return false; } }), "disconnect cleanup completes");
     service.release_modem();
 }
+void frequency_logging(app::RigService& service) {
+    std::mutex mutex;
+    std::string logs;
+    const int previous_level = app::g_level.exchange(app::INFO);
+    struct ResetLog {
+        int level;
+        ~ResetLog() { app::set_log_sink({}); app::g_level = level; }
+    } reset{previous_level};
+    app::set_log_sink([&](int, const std::string& message) {
+        std::lock_guard lock(mutex);
+        logs += message + '\n';
+    });
+    const auto contains = [&](const std::string& text) {
+        std::lock_guard lock(mutex);
+        return logs.find(text) != std::string::npos;
+    };
+    QTcpSocket client; connect(client, service.port());
+    check::is_true(command(client, "F 14081000\n") == "RPRT 0\n", "logging preserves tune acknowledgement");
+    check::is_true(contains("request set_freq: 14081000"), "tune request is visible at INFO");
+    check::is_true(contains("result set_freq: 14081000 RPRT 0 readback_hz=14081000.000000 reply=queued"), "tune result includes readback and queued acknowledgement");
+    check::is_true(command(client, "f\n").startsWith("14081000"), "logging preserves frequency reads");
+    check::is_true(!contains("request get_freq:"), "polling stays quiet at INFO");
+    app::g_level = app::DEBUG;
+    command(client, "f\n");
+    check::is_true(contains("result get_freq: RPRT 0 Frequency=14081000.000000 reply=queued"), "DEBUG includes read replies");
+    check::is_true(command(client, "F nan\n") == "RPRT -1\n", "logging preserves invalid-frequency error");
+    check::is_true(contains("result set_freq: nan RPRT -1 reason=invalid number reply=queued"), "rejected tune logs reason and negative acknowledgement");
+    service.reserve_modem();
+    check::is_true(command(client, "F 14082000\n") == "RPRT -9\n", "logging preserves tuning interlock");
+    check::is_true(contains("result set_freq: 14082000 RPRT -9 reason=radio busy reply=queued"), "busy tune logs negative acknowledgement");
+    service.release_modem();
+    client.abort();
+}
 void ownership(app::RigService& service) {
     QTcpSocket first, second;
     connect(first, service.port()); connect(second, service.port());
@@ -324,6 +359,7 @@ int main(int argc, char** argv) {
         net_client(service);
         extended_controls(service);
         ownership(service);
+        frequency_logging(service);
         station_cycles(service, *counts);
         QTcpSocket uncertain; connect(uncertain, service.port());
         counts->fail_key = true;

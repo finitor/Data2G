@@ -138,6 +138,8 @@ struct Reply {
     bool report = false;
     std::vector<std::pair<std::string, std::string>> fields;
     std::string raw;
+    std::string problem;  // diagnostic only, never changes the protocol response
+    std::optional<double> frequency_readback;
 };
 struct Command {
     std::string name;
@@ -184,6 +186,16 @@ QByteArray format(const Command& cmd, const Reply& reply) {
     if (cmd.separator || reply.error || reply.report || (reply.fields.empty() && reply.raw.empty()))
         out += "RPRT " + std::to_string(reply.error) + (cmd.separator ? cmd.separator : '\n');
     return QByteArray::fromStdString(out);
+}
+bool frequency_command(const Command& cmd) {
+    return cmd.name == "set_freq" || cmd.name == "get_freq" ||
+           cmd.name == "set_split_freq" || cmd.name == "get_split_freq" ||
+           cmd.name == "set_split_freq_mode" || cmd.name == "get_split_freq_mode";
+}
+std::string log_text(std::string text) {
+    // Keep untrusted client arguments and backend errors on one printable line.
+    for (auto& ch : text) if (static_cast<unsigned char>(ch) < 32 || ch == 127) ch = '?';
+    return text;
 }
 double number(const std::string& text) {
     std::size_t n = 0;
@@ -311,23 +323,39 @@ void RigService::read(const std::shared_ptr<Client>& c) {
     }
     process(c);
 }
+void RigService::respond(const std::shared_ptr<Client>& c) {
+    const auto response = format(c->command, *c->reply);
+    const bool queued = c->alive && c->socket && c->socket->write(response) == response.size();
+    if (frequency_command(c->command)) {
+        const int level = c->reply->error ? WARNING : c->command.name.starts_with("set_") ? INFO : DEBUG;
+        std::string message = "rigctld client=" + std::to_string(c->id) + " result " + log_text(c->command.header)
+            + " RPRT " + std::to_string(c->reply->error);
+        if (c->reply->frequency_readback) message += " readback_hz=" + std::to_string(*c->reply->frequency_readback);
+        for (const auto& [name, value] : c->reply->fields) message += " " + name + "=" + log_text(value);
+        if (!c->reply->problem.empty()) message += " reason=" + log_text(c->reply->problem);
+        message += queued ? " reply=queued" : " reply=not_queued";
+        log_line(level, message);
+    }
+    if (c->socket && c->socket->bytesToWrite() > 65536) c->socket->abort();
+}
 void RigService::process(const std::shared_ptr<Client>& c) {
     using namespace std::chrono_literals;
     if (c->pending.valid()) {
         if (c->pending.wait_for(0ms) != std::future_status::ready) return;
         try { c->pending.get(); }
-        catch (const rig::RigError& e) { c->reply->error = e.code; }
-        catch (...) { c->reply->error = -6; }
-        if (c->alive && c->socket) {
-            c->socket->write(format(c->command, *c->reply));
-            if (c->socket->bytesToWrite() > 65536) c->socket->abort();
-        }
+        catch (const rig::RigError& e) { c->reply->error = e.code; c->reply->problem = e.what(); }
+        catch (const std::exception& e) { c->reply->error = -6; c->reply->problem = e.what(); }
+        catch (...) { c->reply->error = -6; c->reply->problem = "unknown backend error"; }
+        respond(c);
     }
     if (!c->alive || c->lines.empty()) return;
     c->command = parse(c->lines.front());
     c->lines.pop_front();
     if (c->command.name == "quit") { c->socket->write("RPRT 0\n"); c->socket->disconnectFromHost(); return; }
     c->reply = std::make_shared<Reply>();
+    if (frequency_command(c->command))
+        log_line(c->command.name.starts_with("set_") ? INFO : DEBUG,
+                 "rigctld client=" + std::to_string(c->id) + " request " + log_text(c->command.header));
     try {
         c->pending = radio_->controller->request([s = radio_, c, cmd = c->command, reply = c->reply](rig::RigBackend& backend) {
             if (!c->alive) throw rig::RigError("client disconnected");
@@ -450,7 +478,9 @@ void RigService::process(const std::shared_ptr<Client>& c) {
                 // Preserve the existing current-frequency/mode readback. Other
                 // writes wait for a getter/poll rather than a chain of CAT reads.
                 if (request.target == "currVFO" && request.op == Op::SetFrequency) {
-                    const auto hz = backend.frequency_hz(); std::lock_guard lock(s->mutex); s->frequency = hz;
+                    const auto hz = backend.frequency_hz();
+                    reply->frequency_readback = hz;
+                    std::lock_guard lock(s->mutex); s->frequency = hz;
                 } else if (request.target == "currVFO" && request.op == Op::SetMode) {
                     const auto m = backend.mode(); std::lock_guard lock(s->mutex); s->mode = m;
                 } else if (request.op == Op::SetVfo) {
@@ -501,7 +531,8 @@ void RigService::process(const std::shared_ptr<Client>& c) {
         }, c->command.name == "set_ptt");
     } catch (const rig::RigError& e) {
         c->reply->error = e.code;
-        if (c->socket) c->socket->write(format(c->command, *c->reply));
+        c->reply->problem = e.what();
+        respond(c);
     }
 }
 }  // namespace data2g::app

@@ -43,6 +43,7 @@ private:
     void accept();
     void read(const std::shared_ptr<Client>& client);
     void process(const std::shared_ptr<Client>& client);
+    void respond(const std::shared_ptr<Client>& client);
     void disconnect(const std::shared_ptr<Client>& client);
     std::shared_ptr<SharedRadio> radio_;
     QTcpServer server_;

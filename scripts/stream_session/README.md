@@ -35,16 +35,17 @@ spread (the generator's two-sigma convention), continuous across bursts and
 reciprocal; independent continuous noise at each receiver; +4.5 Hz CFO each
 way unless a point says otherwise.
 
-SNR is in 2500 Hz against the bursts' mean power: every burst is sent at a
-mean power of 0.01, so this is `hfchannel.awgn`'s definition, the one the
-test suite uses. It is not the PEP-fair convention that upstream's AGENTS.md (#319) section 11
-asks studies on `ContinuousChannel` to use (`DATA2G_PEP_REF_DB=5`: noise
-against each burst's peak less 5 dB). Data2G's clipped bursts sit well under
-5 dB peak-to-average (`phy.peak_db`): OFDM 2.4-2.9 dB (w48 about 4), CPM/FSK
-about 0.1. So a PEP-5 cell of the same number is easier for every mode: 2.1-2.6
-dB for OFDM, 1.0 for w48, 4.8-4.9 for CPM/FSK. Results from this harness are
-not on the PEP scale and do not compare directly with loss-study cells or ladder
-scores.
+SNR is in 2500 Hz, on one of two scales, chosen by `DATA2G_PEP_REF_DB` (recorded in each row as
+`pep_ref_db`):
+
+- **PEP-fair, `DATA2G_PEP_REF_DB=5`** (upstream AGENTS.md (#319) section 11; use this for new
+  runs): every burst keeps the engine's full-scale envelope peak, as data2g-host sends it, and the
+  noise is against that peak less 5 dB, as `phy_session.floor_sigma` sets it. A burst whose
+  peak-to-average is 5 dB has the cell's SNR; Data2G's sit lower (`phy.peak_db`: OFDM 2.4-2.9 dB,
+  w48 about 4, CPM/FSK about 0.1), so they see 2.1-2.6, 1.0 and 4.8-4.9 dB more.
+- **Mean power, unset** (runs up to 2026-11-25): every burst is rescaled to a mean power of 0.01,
+  `hfchannel.awgn`'s definition, the test suite's. Not on the PEP scale: those results do not
+  compare directly with loss-study cells, ladder scores or PEP-5 runs of the same cell.
 
 `run_sessions.POINTS` lists every point. The groups:
 
@@ -83,7 +84,7 @@ counted. Wrong delivered bytes abort the trial.
 
 ## Limits
 
-- Each transmitted burst is rescaled to a mean power of 0.01 (an equal mean power comparison, not equal PEP: see Channel points).
+- Bursts are at the engine's full-scale peak (PEP-fair) or rescaled to equal mean power: see Channel points. Neither models a radio's ALC or clipper.
 - The decision-directed decoder has no wall-clock budget, so real-time decoder deadlines are not modelled.
 - No AGC, clipping, radio passband or independent forward/reverse fading. Sample-clock error only in the clock points.
 - Python Engine, ARQ and policy with native DSP: the native Engine and host are not exercised.

@@ -18,6 +18,7 @@ import numpy as np
 from scipy import signal
 D2G = Path(os.environ.get("STREAM_SESSION_MODEM") or Path(__file__).resolve().parents[2]).resolve()
 BLOCK = 480
+PEP = bool(os.environ.get("DATA2G_PEP_REF_DB"))
 sys.path[:0] = [str(D2G), str(D2G / "tests")]
 import native_subs
 native, why = native_subs.import_native()
@@ -64,10 +65,11 @@ def _log_state(i, s, polled):
 class Engine(E.Engine):
     def _start_tx(self, bursts, t, main):
         super()._start_tx(bursts, t, main)
-        # Equal active mean power, after the live engine's peak scaling.
+        # Mean-power SNR: equal active mean power, after the live engine's peak scaling.
+        # PEP-fair (DATA2G_PEP_REF_DB set, stream_channel.py): the engine's full-scale peak as sent.
         a = self.tx[1]
         lo = np.flatnonzero(abs(a) > 1e-10)
-        if len(lo):
+        if len(lo) and not PEP:
             p = np.mean(a[lo[0]:lo[-1]+1]**2)
             self.tx[1] = a*np.sqrt(0.01/p)
         print(json.dumps(dict(t=t, event="tx", mode=main.submode)), file=sys.stderr, flush=True)

@@ -17,11 +17,12 @@ import sys
 import time
 from pathlib import Path
 import numpy as np
-from stream_channel import StreamingChannel, BLOCK, FS
+from stream_channel import StreamingChannel, BLOCK, FS, PEP_REF_DB
 
 HERE = Path(__file__).resolve().parent
 # (name, Doppler spread Hz, delay ms, SNR dB in 2500 Hz, carrier: False, True (steady) or its own Doppler
-# spread Hz[, options]). SNR: against the bursts' mean power (hfchannel.awgn's, the test suite's). Options:
+# spread Hz[, options]). SNR: mean power, or PEP-fair with DATA2G_PEP_REF_DB
+# (stream_channel.py). Options:
 # stream_channel.StreamingChannel's (cfo, cfo_rate, ppm, qrm) and cap, the session's bandwidth cap code
 # (0: 500 Hz, 1: 1200, 2: none; default 2).
 QRM_NOISE = ("noise", 1500.0, 500.0, 20.0, 3.0, 0.3)  # run_gate.py's qrm-noise: 30% of the time, mean 3 s
@@ -153,7 +154,7 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
             proc.stdin.close()
             proc.wait(timeout=20)
     assert proc.returncode == 0, f"endpoint exited {proc.returncode}: {logpath}"
-    row = dict(modem=modem, point=point, seed=seed, nbytes=nbytes,
+    row = dict(modem=modem, point=point, seed=seed, nbytes=nbytes, pep_ref_db=PEP_REF_DB,
                connected=all(c is not None for c in connection), connected_at=connection,
                delivered=status[2:4], delivered_at=delivered_at, acknowledged_at=acknowledged_at,
                complete=acknowledged_at is not None, close_confirmed=bool(close_at is not None and status[6]),

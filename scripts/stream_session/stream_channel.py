@@ -1,9 +1,13 @@
 """Streaming adapter for phy_session.ContinuousChannel's existing tap process.
 
 The finite Hilbert filter adds latency; it does not regenerate or normalize
-fades per block/burst.  Noise is continuous and referenced to normalized TX
-power 0.01 in 2500 Hz (every burst is sent at that mean power, so this is
-hfchannel.awgn's SNR, the test suite's: against the burst's own mean power).
+fades per block/burst.  Noise is continuous, in 2500 Hz, against one of two
+references (the endpoint sends bursts to match):
+  DATA2G_PEP_REF_DB unset  mean power 0.01: every burst is rescaled to it, so this is
+                           hfchannel.awgn's SNR, the test suite's
+  DATA2G_PEP_REF_DB=5      PEP-fair (upstream AGENTS.md section 11): bursts keep the
+                           engine's full-scale envelope peak (1), and the noise is against
+                           that peak less REF dB, as phy_session.floor_sigma sets it
 The adapter runs at 48 kHz, in 10 ms blocks.
 
 Options a point can add (run_sessions.POINTS' sixth element):
@@ -28,6 +32,10 @@ sys.path[:0] = [str(D2G), str(D2G / "scripts")]
 from phy_session import ContinuousChannel
 
 FS, BLOCK, POWER, HORIZON = 48000, 480, 0.01, 240.0
+PEP_REF_DB = float(os.environ["DATA2G_PEP_REF_DB"]) if os.environ.get("DATA2G_PEP_REF_DB") else None
+# The signal power the cell's SNR is against: the bursts' mean power, or a full-scale
+# peak's (envelope 1: power 0.5) less PEP_REF_DB.
+S_POWER = POWER if PEP_REF_DB is None else 0.5 / 10**(PEP_REF_DB/10)
 # The interfering tone: its (mean) power over the noise in 50 Hz, as data2g.interference's
 # Qrm("carrier", ...) defines one (CARRIER_REF_HZ). Generated here, not rendered by that module:
 # it runs at the modem's 8 kHz, and this tone's phase and seeds are what the recorded studies used.
@@ -104,7 +112,7 @@ class StreamingChannel:
             self.cfade = [ContinuousChannel("comparison", snr, seed + 5000000 + i, HORIZON, doppler=self.cdop, delay_ms=0.0)
                           for i in range(2)]
             self.cgrid = np.arange(len(self.cfade[0].g[0]), dtype=np.float64)
-        self.sigma = np.sqrt(POWER * (FS / 2) / 2500 / 10**(snr/10))
+        self.sigma = np.sqrt(S_POWER * (FS / 2) / 2500 / 10**(snr/10))
         self.rng = [np.random.default_rng(np.random.SeedSequence([seed, 7000000, i])) for i in range(2)]
         self.phase = [np.random.default_rng(seed+9000000+i).uniform(0, 2*np.pi) for i in range(2)]
         k = np.arange(-256, 257)

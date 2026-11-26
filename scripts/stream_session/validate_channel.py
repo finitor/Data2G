@@ -5,7 +5,7 @@ for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 import json
 import numpy as np
 from scipy import signal
-from stream_channel import StreamingChannel, FS, BLOCK, POWER
+from stream_channel import StreamingChannel, FS, BLOCK, S_POWER as POWER  # the SNR reference, either scale
 
 
 def render(ch, x):

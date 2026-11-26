@@ -10,6 +10,7 @@ detection, CW ID sense, timers running against air time.
 | File | Role |
 |---|---|
 | `run_sessions.py` | Runs trials: channel points, seeds, payload size; one JSON row and one log per trial. |
+| `endpoint_data2g_native.py` | `--modems data2g-native`: both stations on the native C++ engine (`native.engine.Engine`, what `data2g-host` runs), stepped synchronously, with the app's native 48 ↔ 8 kHz rate conversion; PEP-fair only. Writes per-block CPU for `cpu` in each row. |
 | `endpoint_data2g.py` | Both stations in one process: Python Engine, ARQ and policy over native DSP. |
 | `stream_channel.py` | `phy_session.ContinuousChannel`'s taps as a streaming 48 kHz channel, plus noise and an optional interfering carrier. |
 | `validate_channel.py` | Physical checks of the channel: signal against the analytic delayed tone, noise variance, carrier level, determinism. |
@@ -27,6 +28,7 @@ python scripts/stream_session/run_sessions.py --points carrier,hilat --trials 8 
 - `STREAM_SESSION_MODEM`: the Data2G checkout the stations run (default: this one).
 - `STREAM_SESSION_CHANNEL`: the Data2G checkout the channel generator comes from (default: this one). Pin it to one revision to compare modem revisions on identical channels.
 - `STREAM_SESSION_XARA`: the binary for `--modems xara`, a Xara comparison adapter speaking the same pipe protocol (seed, two payload files, cap; cap 0 selects Xara's 500 Hz bandwidth). Under `DATA2G_PEP_REF_DB` the harness sets `XARA_PEAK_FULL_SCALE=1`, which a study-patched adapter takes as every burst at sample peak 1.0; unset, it sends at mean power 0.01.
+- CPU: endpoints that write per-block CPU (`data2g-native`, and a Xara adapter built with the study's patch) get a `cpu` entry in each row: each station's modem and rate-conversion thread time, the whole process's, and the load in cores at real time, averaged over the session and over its busiest 1 s window (`peak`, `p95`). Single-threaded on this machine: scale by a measured factor for other hardware.
 - `STREAM_SESSION_LOG=1`: the modem's own log lines, and each station's receiver, CW-sense and timer state whenever it changes, in the trial's log.
 
 ## Channel points

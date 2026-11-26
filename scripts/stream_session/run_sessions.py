@@ -95,6 +95,30 @@ SETS = {"awgn-pep5": ["clean", "awgn+10", "awgn+0", "awgn-6", "awgn-10", "awgn-1
                       "awgn-16", "awgn-19", "awgn-20", "awgn-21"]}
 
 
+CPU_WINDOW_S = 1.0
+
+
+def cpu_metrics(path, elapsed):
+    """Per-station CPU from an endpoint's per-block file (endpoint_data2g_native.py, the Xara adapter's
+    XARA_CPU): five uint64 ns per 10 ms block, the stations' modem thread time, their rate conversion (Data2G
+    only: 48 <-> 8 kHz through the app's native Decimator and Interpolator) and the whole process. A
+    station's load counts its modem and rate conversion: audio in and out at 48 kHz, as Xara's process()
+    takes it. Loads are in cores at real time: average over the
+    session, and the busiest CPU_WINDOW_S of session time (max and 95th percentile of the sliding windows).
+    None when the endpoint wrote no file (endpoint_data2g.py)."""
+    if not path.exists():
+        return None
+    a = np.fromfile(path, dtype="<u8").reshape(-1, 5).astype(float) / 1e9
+    st = a[:, 0:2] + a[:, 2:4]
+    w = max(1, round(CPU_WINDOW_S * FS / BLOCK))
+    c = np.vstack([np.zeros((1, 2)), np.cumsum(st, axis=0)])
+    win = (c[w:] - c[:-w]) / (w * BLOCK / FS) if len(st) >= w else c[-1:] / max(elapsed, 1e-9)
+    return dict(modem_s=a[:, 0:2].sum(0).round(4).tolist(), resample_s=a[:, 2:4].sum(0).round(4).tolist(),
+                process_s=round(float(a[:, 4].sum()), 4), avg=(st.sum(0) / elapsed).round(5).tolist(),
+                peak=win.max(0).round(4).tolist(), p95=np.percentile(win, 95, axis=0).round(4).tolist(),
+                window_s=CPU_WINDOW_S)
+
+
 def read_exact(pipe, n):
     parts = []
     while n:
@@ -115,18 +139,22 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
     payload = [directory/f"{stem}-{i}.bin" for i in range(2)]
     for i, path in enumerate(payload):
         path.write_bytes(np.random.default_rng(np.random.SeedSequence([seed, 1, i])).bytes(nbytes))
-    env = None
+    cpu_file = directory/f"{stem}.cpu"
+    cpu_file.unlink(missing_ok=True)
+    env = dict(os.environ, STREAM_SESSION_CPU=str(cpu_file), XARA_CPU=str(cpu_file))
     if modem == "data2g":
         args = [sys.executable, str(HERE/"endpoint_data2g.py")]
+    elif modem == "data2g-native":
+        args = [sys.executable, str(HERE/"endpoint_data2g_native.py")]
     else:
         # Another modem speaking the same pipe protocol (args: seed, two payloads, cap), e.g. the
         # 2026-11-23 Xara comparison adapter: STREAM_SESSION_XARA names its binary. Under PEP-fair SNR
         # it is told to send every burst at peak 1.0 (XARA_PEAK_FULL_SCALE); otherwise it sends at mean 0.01.
         assert modem == "xara", modem
         args = [os.environ["STREAM_SESSION_XARA"]]
-        env = dict(os.environ, **({"XARA_PEAK_FULL_SCALE": "1"} if PEP_REF_DB is not None else {}))
-        if PEP_REF_DB is None:
-            env.pop("XARA_PEAK_FULL_SCALE", None)
+        env.pop("XARA_PEAK_FULL_SCALE", None)
+        if PEP_REF_DB is not None:
+            env["XARA_PEAK_FULL_SCALE"] = "1"
     logpath = directory/f"{stem}.log"
     ch = StreamingChannel(dop, delay, snr, seed, car, horizon=horizon, **opts)
     inputs = np.zeros((2, BLOCK))
@@ -184,7 +212,7 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
                complete=acknowledged_at is not None, close_confirmed=bool(close_at is not None and status[6]),
                close_s=None if close_at is None else samples/FS-close_at, elapsed=samples/FS,
                airtime=airtime, energy=energy, status=status, events=events,
-               wall_s=time.monotonic()-wall, log=logpath.name)
+               wall_s=time.monotonic()-wall, log=logpath.name, cpu=cpu_metrics(cpu_file, samples/FS))
     (directory/f"{stem}.json").write_text(json.dumps(row, indent=2)+"\n")
     return row
 

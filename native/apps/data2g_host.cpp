@@ -27,6 +27,8 @@ using namespace data2g;
 using namespace data2g::app;
 
 int main(int argc, char** argv) {
+    QCoreApplication app(argc, argv);
+    std::setlocale(LC_NUMERIC, "C");  // Qt set it from the environment; the protocol's numbers use "." (#164)
     const Args a = parse(argc, argv, load_settings(*open_config(argc, argv)));
     if (a.list_modes) {
         list_modes(a.kiss_bw);
@@ -46,8 +48,6 @@ int main(int argc, char** argv) {
     g_level = *level;
     install_arq_log();
 
-    QCoreApplication app(argc, argv);
-    std::setlocale(LC_NUMERIC, "C");  // Qt set it from the environment; the protocol's numbers use "." (#164)
     if (a.list_audio_devices) {
 #ifdef DATA2G_HAVE_AUDIO
         for (const auto& [what, devs] : {std::pair{"input", audio::card::input_devices()}, {"output", audio::card::output_devices()}}) {

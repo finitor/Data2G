@@ -47,9 +47,10 @@ std::string_view fallback(int cap) {
     return cap == 0 ? "n10-ack-4f" : "ack-4f";
 }
 
-std::string_view connect_mode(int cap, int tries) {
+std::string_view connect_mode(int cap, int tries, bool last) {
     cap_hz(cap);
-    if (tries) return ROBUST_CONNECT;
+    // policy.py connect_mode: `last`, the host's last try, in ROBUST_FAST once a ROBUST_CONNECT retry went ahead
+    if (tries) return tries > ROBUST_CONNECT_TRIES || (last && tries >= 2) ? ROBUST_FAST : ROBUST_CONNECT;
     return cap == 0 ? "n10-qpsk-r1/3" : "qpsk-r1/5";
 }
 
@@ -81,7 +82,12 @@ std::pair<std::string_view, int> GearShifter::choose(const StationView& st, int 
         const Mode* r = st.peer_reply_recommend ? decode(*st.peer_reply_recommend) : nullptr;
         return {r && std::find(ok.begin(), ok.end(), r) != ok.end() ? r->name : fallback(st.cap), 2};
     }
-    if (!rec) return {fallback(st.cap), 2};
+    if (!rec) {
+        // nothing recommended yet and my floor is the robust mode (session._robust_start): control only, in it
+        if (st.esc_floor >= ROBUST_ESCALATION)
+            return {last_spread && *last_spread >= ROBUST_FAST_SPREAD_HZ ? ROBUST_FAST : ROBUST_CONNECT, 1};
+        return {fallback(st.cap), 2};
+    }
     const Mode* m = decode(*rec);
     if (!m || std::find(ok.begin(), ok.end(), m) == ok.end()) return {fallback(st.cap), 2};
     return {m->name, slots_for(*m, SIZE_S.at(st.peer_size_hint), st.pending, st.peer_wants_dup)};
@@ -99,6 +105,7 @@ void GearShifter::observe(const Measured& m_in, std::string_view submode, double
     // a burst too short or weak for a Doppler estimate reports the 2.0 Hz
     // default (what MPD measures): it takes the peer's last measured spread
     Measured m = m_in;
+    heard_spread = m.spread_est != UNMEASURED_SPREAD_HZ ? std::optional<double>(m.spread_est) : std::nullopt;
     if (m.spread_est != UNMEASURED_SPREAD_HZ)
         last_spread = m.spread_est;
     else if (last_spread)
@@ -109,6 +116,14 @@ void GearShifter::observe(const Measured& m_in, std::string_view submode, double
     measured_at = now;
     heard = std::string(submode);
     spreads.push_back(m.spread_est);
+    // FM's regime input (predictor fm_outcome): the median over the peer's last bursts (policy.py)
+    n0_spreads.push_back(m.n0_spread_db);
+    if (n0_spreads.size() > static_cast<std::size_t>(tables::OUTCOME_GATE_HIST))
+        n0_spreads.erase(n0_spreads.begin(), n0_spreads.end() - tables::OUTCOME_GATE_HIST);
+    std::vector<double> v = n0_spreads;  // np.median: the middle one, or the mean of the middle two
+    std::sort(v.begin(), v.end());
+    const std::size_t h = v.size() / 2;
+    measured->n0_spread_db = v.size() % 2 ? v[h] : 0.5 * (v[h - 1] + v[h]);
     floor_spreads.push_back(mode_at(submode).is_cpm() ? FLOOR_CPM_SPREAD_HZ : m.spread_est);
     if (floor_spreads.size() > CPM_FLOOR_HIST)
         floor_spreads.erase(floor_spreads.begin(), floor_spreads.end() - CPM_FLOOR_HIST);
@@ -116,6 +131,15 @@ void GearShifter::observe(const Measured& m_in, std::string_view submode, double
     if (snrs.size() > CPM_FLOOR_HIST) snrs.erase(snrs.begin(), snrs.end() - CPM_FLOOR_HIST);
     if (spreads.size() > static_cast<std::size_t>(tables::OUTCOME_GATE_HIST))
         spreads.erase(spreads.begin(), spreads.end() - tables::OUTCOME_GATE_HIST);
+}
+
+void GearShifter::update_measured(const Measured& m_in) {
+    if (!measured) return;
+    Measured m = m_in;
+    m.n0_spread_db = measured->n0_spread_db;
+    if (!m.noise && measured->noise) m.noise = measured->noise;
+    measured = m;
+    if (!snrs.empty()) snrs.back() = m.snr_est;
 }
 
 void GearShifter::observe_energy(double snr_db, double) {
@@ -173,8 +197,10 @@ int GearShifter::gate() const {
 double GearShifter::reply_hold(const StationView& st, std::string_view submode) const {
     std::vector<std::string_view> ms = {log.empty() ? fallback(st.cap) : std::string_view(log.back().reply)};
     if (st.misses) ms.insert(ms.end(), {fallback(st.cap), ALT_POLL});
-    if (submode == ROBUST_CONNECT || submode == ROBUST_FAST || st.esc_floor >= ROBUST_ESCALATION)
-        ms.insert(ms.end(), {ROBUST_CONNECT, ROBUST_FAST});
+    if (submode == ROBUST_CONNECT || submode == ROBUST_FAST || st.esc_floor >= ROBUST_ESCALATION) {
+        ms.push_back(ROBUST_CONNECT);
+        if (ROBUST_FAST != ROBUST_CONNECT) ms.push_back(ROBUST_FAST);  // the same mode on FM (policy.py ROBUST_MODES)
+    }
     double t = 0.0;
     for (auto m : ms) {
         const Mode& md = mode_at(m);
@@ -185,6 +211,7 @@ double GearShifter::reply_hold(const StationView& st, std::string_view submode) 
 
 void GearShifter::outcome(std::string_view submode, int decoded, int sent, std::optional<bool> usable) {
     if (usable && *usable && sent) {
+        start_bound = false;
         data_lost = 0;
         ladder_left = false;
         if (ceiling) {  // climb a step; back at the mode whose losses started it, it's off
@@ -228,6 +255,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
     std::optional<Prev> pv;
     // older history is used as PREV_MAX_S old, not dropped (policy.py)
     if (prev) pv = Prev{prev->m, prev->band, std::min(measured_at - prev->at, PREV_MAX_S)};
+    const double gp = gap(st);
 
     // the noise rule: each candidate predicted as if its SNR were lower by
     // noise_shift_db (its band's noise in the profile against the measured band's)
@@ -251,7 +279,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
         auto it = memo.find(key);
         if (it == memo.end()) {
             const auto [sec, sh, i] = key;
-            it = memo.emplace(key, predict_queries(shifted(me, sh), measured_band, gap_s, pv ? &*pv : nullptr, gated,
+            it = memo.emplace(key, predict_queries(shifted(me, sh), measured_band, gp, pv ? &*pv : nullptr, gated,
                                                    {{sec, i}})[0]).first;
         }
         return it->second;
@@ -286,6 +314,17 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
                 if (s->is_cpm()) c.push_back(s);
         if (!c.empty()) data_cands = std::move(c);
     }
+    if (start_bound && !cands.empty()) {  // a robust start's first data (policy.py ROBUST_START_DATA_MARGIN_DB)
+        const double lim = measured->snr_est + ROBUST_START_DATA_MARGIN_DB;
+        std::vector<const Mode*> c;
+        for (const Mode* s : data_cands)
+            if (mode_thresholds(s->name)[0] <= lim) c.push_back(s);
+        if (c.empty())  // none that robust: the lowest steady-channel threshold (the first of them, as Python's min)
+            c = {*std::min_element(cands.begin(), cands.end(), [](const Mode* a, const Mode* b) {
+                return mode_thresholds(a->name)[0] < mode_thresholds(b->name)[0];
+            })};
+        data_cands = std::move(c);
+    }
     {  // every prediction the loops below ask for, in one batch (the weights read once);
        // predicted_at computes any other lazily (the chat size cut, the final pick)
         std::vector<std::tuple<double, double, int>> keys;
@@ -301,7 +340,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
         for (const auto& [sh, ks] : by_shift) {
             std::vector<ModeQuery> qs;
             for (const std::size_t k : ks) qs.push_back({std::get<0>(keys[k]), std::get<2>(keys[k])});
-            const auto got = predict_queries(shifted(me, sh), measured_band, gap_s, pv ? &*pv : nullptr, gated, qs);
+            const auto got = predict_queries(shifted(me, sh), measured_band, gp, pv ? &*pv : nullptr, gated, qs);
             for (std::size_t j = 0; j < ks.size(); ++j) memo.emplace(keys[ks[j]], got[j]);
         }
     }
@@ -364,7 +403,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
         best_name = best->name;
         const int nb = slots_for(*best, SIZE_S[best_hint]);
         predicted = {{std::string(best->name), {q_burst(*best, nb), q_cw(*best, nb)}}};
-        want_dup = predicted.begin()->second.first < DUP_BELOW;
+        want_dup = predicted.begin()->second.first < DUP_BELOW || start_bound;
         if (reply) predicted[std::string(reply->name)] = {q_burst(*reply, 1), q_cw(*reply, 1)};
     }
     const std::string_view reply_name = reply ? reply->name : fallback(st.cap);
@@ -387,6 +426,7 @@ StationView view(const Station& st) {
     v.misses = st.misses;
     v.esc_floor = st.esc_floor;
     v.last_rx_data = st.last_rx_data;
+    v.tx_end = st.tx_end;
     return v;
 }
 
@@ -412,10 +452,15 @@ std::optional<double> GearPolicy::snr_est() {
 std::string GearPolicy::measured_extra() {
     if (!shifter.measured) return {};
     const Measured& m = *shifter.measured;
-    char buf[128];
+    char buf[160];
+    std::string out;
+    if (m.mer_db) {
+        std::snprintf(buf, sizeof buf, ", mer %.1f dB", *m.mer_db);
+        out += buf;
+    }
     std::snprintf(buf, sizeof buf, ", spread %.2f Hz, delay %.1f ms, mi %.2f/%.2f/%.2f/%.2f", m.spread_est,
                   m.delay_est_ms, m.mi[0], m.mi[1], m.mi[2], m.mi[3]);
-    std::string out = buf;
+    out += buf;
     if (!shifter.energies.empty()) {
         std::snprintf(buf, sizeof buf, ", energy %.1f dB", shifter.energies.back());
         out += buf;
@@ -423,6 +468,6 @@ std::string GearPolicy::measured_extra() {
     return out;
 }
 double GearPolicy::airtime(const std::string& m, int n_cw, bool dup) { return burst_seconds(mode_at(m), n_cw, dup); }
-std::string GearPolicy::connect_mode(int cap, int tries) { return std::string(arq::connect_mode(cap, tries)); }
+std::string GearPolicy::connect_mode(int cap, int tries, bool last) { return std::string(arq::connect_mode(cap, tries, last)); }
 
 }  // namespace data2g::arq

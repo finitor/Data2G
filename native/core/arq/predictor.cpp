@@ -3,9 +3,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
+#include "arq/modes.hpp"
 #include "cpm/cpm.hpp"
 #include "dsp/dsp.hpp"
 #include "waveform/ofdm.hpp"
@@ -47,6 +52,33 @@ std::string_view const_family(std::string_view name) {
 
 double capacity(double snr_db, std::string_view constellation) {
     return interp(snr_db, tables::CAPACITY_GRID, table(constellation).mi);
+}
+
+double inv_capacity(double mi, std::string_view constellation) {
+    const auto& t = table(constellation).mi;
+    if (mi >= t.back() - 1e-5) return std::numeric_limits<double>::infinity();
+    return interp(mi, t, tables::CAPACITY_GRID);
+}
+
+double band_bw_db(std::string_view band) {
+    const auto& b = config::band(band);
+    return 10.0 * std::log10(static_cast<double>(b.nc) * config::RS / config::SNR_REF_BW_HZ);
+}
+
+bool data_mer_default() {
+    static const bool on = [] {
+        const char* v = std::getenv("DATA2G_DATA_MER");
+        return !v || std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+double fm_mer_offset_db() {
+    static const double off = [] {
+        const char* v = std::getenv("DATA2G_FM_MER_OFFSET");
+        return v && *v ? std::strtod(v, nullptr) : 2.0;
+    }();
+    return off;
 }
 
 double peak_db(std::string_view mode, int cap) {
@@ -112,6 +144,35 @@ double effective_mi(std::span<const std::complex<double>> h, std::span<const dou
         mi[i] = interp(snr, tables::CAPACITY_GRID, t.mi);
     }
     return dsp::pairwise_sum(mi) / static_cast<double>(mi.size());
+}
+
+std::array<double, CONSTS.size()> effective_mi_all(std::span<const double> h2, std::span<const double> var) {
+    if (h2.size() != var.size() || h2.empty()) throw std::invalid_argument("effective_mi_all: h2 and var must match");
+    const auto& grid = tables::CAPACITY_GRID;
+    const std::size_t gn = grid.size();
+    const double g0 = grid[0], g1 = grid[gn - 1];
+    const double inv_step = static_cast<double>(gn - 1) / (g1 - g0);
+    std::array<const double*, CONSTS.size()> tbl{};
+    for (std::size_t c = 0; c < CONSTS.size(); ++c) tbl[c] = table(CONSTS[c]).mi.data();
+    std::array<double, CONSTS.size()> sum{};
+    const std::size_t N = h2.size();
+    for (std::size_t i = 0; i < N; ++i) {
+        const double snr = 10.0 * std::log10(std::max(h2[i] / var[i], 1e-6));
+        if (snr <= g0) {
+            for (std::size_t c = 0; c < CONSTS.size(); ++c) sum[c] += tbl[c][0];
+        } else if (snr >= g1) {
+            for (std::size_t c = 0; c < CONSTS.size(); ++c) sum[c] += tbl[c][gn - 1];
+        } else {
+            const double pos = (snr - g0) * inv_step;
+            const auto j = std::min(static_cast<std::size_t>(pos), gn - 2);
+            const double frac = (snr - grid[j]) / (grid[j + 1] - grid[j]);
+            for (std::size_t c = 0; c < CONSTS.size(); ++c) sum[c] += tbl[c][j] + frac * (tbl[c][j + 1] - tbl[c][j]);
+        }
+    }
+    std::array<double, CONSTS.size()> out{};
+    const double inv_n = 1.0 / static_cast<double>(N);
+    for (std::size_t c = 0; c < CONSTS.size(); ++c) out[c] = sum[c] * inv_n;
+    return out;
 }
 
 std::vector<double> outcome_inputs(const Measured& m, std::string_view band, double gap, double seconds,
@@ -247,7 +308,58 @@ std::vector<double> outcome_logits(std::span<const double> x, int model) {
     return outcome_logits_batch({std::vector<double>(x.begin(), x.end())}, model)[0];
 }
 
+// FM (predictor.py fm_outcome, which has the measurements): no outcome model
+// has seen an FM channel; each mode's threshold table row (MODE_THRESHOLDS,
+// FM's own: snr_est at its 10% knee, static / flutter / mobile / worst) is
+// P = 0.9. Steady noise (the shifter's median n0_spread_db under
+// FM_FADING_SPREAD_DB): the static column, FM_SLOPE_STEADY logits per dB;
+// fading: the mobile column, FM_SLOPE_FADING. A reading on another band is
+// moved by the bands' snr_est offsets on the same channel.
+namespace {
+constexpr bool FM_THRESHOLD = config::PROFILE == "fm";
+constexpr double FM_SLOPE_STEADY = 1.50, FM_SLOPE_FADING = 0.51;  // the calibration's fit (predictor.py)
+constexpr double FM_FADING_SPREAD_DB = 1.0;  // predictor.py: flutter reaches 0.7
+
+double fm_band_offset_db(std::string_view band) {  // snr_est against f55's, same channel (predictor.py)
+    if (band == "w") return 0.8;
+    if (band == "n10" || band == "f108") return -3.9;
+    return 0.0;
+}
+
+// on steady noise, a reading on another band moved this much more for a mode on it (predictor.py)
+double fm_steady_offset_db(std::string_view band) { return band == "f108" ? -1.0 : 0.0; }
+
+Outcome fm_outcome(const Measured& meas, int mode, std::string_view measured_band) {
+    const auto& row = tables::MODE_THRESHOLDS[static_cast<std::size_t>(mode)];
+    const Mode* m = arq::mode(row.name);
+    double snr = meas.snr_est;
+    const bool fading = meas.n0_spread_db >= FM_FADING_SPREAD_DB;
+    if (data_mer_default() && m && !measured_band.empty() && m->band == measured_band && !m->is_cpm()) {
+        const auto cf = const_family(m->ofdm->constellation);
+        for (std::size_t i = 0; i < CONSTS.size(); ++i) {
+            if (CONSTS[i] == cf) {
+                const double eq = inv_capacity(meas.mi[i], cf);
+                if (std::isfinite(eq)) snr = std::min(snr, eq + band_bw_db(m->band) + fm_mer_offset_db());
+                break;
+            }
+        }
+    }
+    if (m && !measured_band.empty()) {
+        snr += fm_band_offset_db(m->band) - fm_band_offset_db(measured_band);
+        if (m->band != measured_band && !fading) snr += fm_steady_offset_db(m->band);
+    }
+    const double k = fading ? FM_SLOPE_FADING : FM_SLOPE_STEADY;
+    const double p = sigmoid(std::clamp(std::log(9.0) + k * (snr - row.db[fading ? 2 : 0]), -40.0, 40.0));
+    return {p, p};
+}
+}  // namespace
+
 int outcome_index(std::string_view submode) {
+    if constexpr (FM_THRESHOLD) {
+        const auto& t = tables::MODE_THRESHOLDS;
+        const auto it = std::find_if(t.begin(), t.end(), [&](const auto& r) { return r.name == submode; });
+        return it == t.end() ? -1 : static_cast<int>(it - t.begin());
+    }
     const auto& names = tables::OUTCOME_MODES;
     const auto it = std::find(names.begin(), names.end(), submode);
     return it == names.end() ? -1 : static_cast<int>(it - names.begin());
@@ -257,6 +369,15 @@ bool outcome_knows(std::string_view submode) { return outcome_index(submode) >= 
 
 std::vector<std::vector<Outcome>> predict_outcomes(const std::vector<OutcomeQuery>& qs, std::string_view band,
                                                    double gap, const Prev* prev, int model) {
+    if constexpr (FM_THRESHOLD) {
+        std::vector<std::vector<Outcome>> out;
+        for (const auto& q : qs) {
+            std::vector<Outcome> row;
+            for (std::size_t i = 0; i < tables::MODE_THRESHOLDS.size(); ++i) row.push_back(fm_outcome(q.m, static_cast<int>(i), band));
+            out.push_back(std::move(row));
+        }
+        return out;
+    }
     const bool energy = model == 1   ? tables::OUTCOME_GATE_ENERGY
                         : model == 2 ? tables::OUTCOME_FAST_ENERGY
                                      : tables::OUTCOME_ENERGY;
@@ -279,6 +400,10 @@ std::vector<std::vector<Outcome>> predict_outcomes(const std::vector<OutcomeQuer
 std::vector<Outcome> predict_queries(const Measured& m, std::string_view band, double gap, const Prev* prev, int model,
                                      const std::vector<ModeQuery>& qs) {
     std::vector<Outcome> out(qs.size());
+    if constexpr (FM_THRESHOLD) {
+        for (std::size_t i = 0; i < qs.size(); ++i) out[i] = fm_outcome(m, qs[i].mode, band);
+        return out;
+    }
     auto offset = [](int mode) {
         double off = 0.0;
         for (const auto& [name, o] : LOGIT_OFFSETS)

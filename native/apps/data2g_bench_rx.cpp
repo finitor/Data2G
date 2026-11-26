@@ -2,8 +2,9 @@
 // machine with no Python. Each file is one burst (made by a script of numpy's channel simulator):
 //
 //   data2g-bench-rx [--threads N] [--reps R] [--dd-budget S] BURST.d2gb ...
-//   data2g-bench-rx --listen SECONDS [--cpm-only] [--sense]  (the streaming Receiver on noise, per 20 ms feed;
-//                                                    --sense: data2g_on_air read too, as with KISS)
+//   data2g-bench-rx --listen SECONDS [--cpm-only]   (the streaming Receiver on noise, per 20 ms feed)
+//   data2g-bench-rx --listen S --engine             (... listening as the ARQ engine does: its accept list and
+//                                                    CPM grids; FM's, its own bands and no CPM)
 //   data2g-bench-rx --shifter N                     (GearShifter::recommend on random observations)
 //   data2g-bench-rx --listen S --expect             (... an expected slot 1 s ahead every 8 s, all CPM grids: #135)
 //   data2g-bench-rx --primed BURST.d2gb ...         (+ cpm::prime_lock on the true start's window and PRIME_TRIES
@@ -11,6 +12,9 @@
 //   data2g-bench-rx --cwid                          (cwid::audio of a long ID: #134)
 //   data2g-bench-rx --nod N                         (nod::detect over a reply slot, N runs per case: the CPU a
 //                                                    station spends listening for a nod after each of its bursts)
+//   data2g-bench-rx --stream [--no-early] BURST.d2gb ...  (OFDM: the streaming Receiver in 20 ms feeds, decoded as
+//                                                    arq::Engine does, decoding while the burst arrives unless
+//                                                    --no-early: the end-of-burst latency)
 //
 // Per burst, the best of R runs: receive (head-limited, as receiver::Receiver), soft bits, the link's prepare
 // (every slot's first pass on the pool) and the slot-by-slot decodes with their DD, then the payloads right.
@@ -46,6 +50,7 @@
 #include "modem/modem.hpp"
 #include "receiver/receiver.hpp"
 #include "util/pool.hpp"
+#include "arq/engine.hpp"
 #include "arq/modes.hpp"
 
 // measurement-only feature tests: #135 (primed reception), #134 (CW ID)
@@ -120,12 +125,12 @@ Burst load(const char* path) {
 double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
 struct Run {
-    double receive = 0, soft = 0, prepare = 0, decode = 0;
+    double receive = 0, soft = 0, prepare = 0, decode = 0, mer = 0;
     double acq = 0, refine = 0;  // CPM: the lock search on the head (live, during the burst), refine (in receive)
     double plock = 0, primed = 0;  // --primed: prime_lock on the window, PRIME_TRIES decode_known
     bool genie = false, plocked = false, pok = false;
     int ok = 0, refines = 0;
-    double total() const { return receive + soft + prepare + decode; }
+    double total() const { return receive + soft + prepare + decode + mer; }
 };
 
 bool primed_on = false;
@@ -212,6 +217,12 @@ Run run(const Burst& b, std::optional<double> dd_budget) {
         out.ok += right(got, q.slot) * (dup && q.slot == 0 ? 2 : 1);
     }
     out.decode = now() - t;
+    if (h.ofdm) {
+        const auto meas = arq::measure(h);
+        t = now();
+        (void)rx.measure_data(meas);
+        out.mer = now() - t;
+    }
 #if BENCH_PRIMED
     if (primed_on) {  // a failed control's retries (Station::primed): PRIME_TRIES hypotheses, the last one right
         const auto& want = b.payloads[0];
@@ -288,11 +299,88 @@ CpmRun run_cpm(const std::string& mode, int n_data, double sigma, bool stream, s
     return out;
 }
 
+// --stream: an OFDM burst file's audio fed to a receiver::Receiver in 20 ms feeds and decoded as arq::Engine does
+// (PartialRequest: receive_partial, ModemRx::advance on the window's share of the DD budget; DecodeRequest: the
+// receive, the same ModemRx's advance with the rest, then the session's keyed reads after prepare). Per burst: the
+// end latency (from the feed holding the burst's end plus Receiver::MARGIN to every slot read), its receive, CPU
+// spent in the feeds while the burst arrived, slots decoded early, partial looks, slots right.
+struct StreamRun {
+    double end = 0, receive = 0, mer = 0, during = 0, max_feed = 0;
+    int ok = 0, early = 0, partials = 0;
+    bool heard = false;
+};
+
+StreamRun run_stream(const Burst& b, bool early, std::optional<double> dd_budget) {
+    receiver::Receiver rx(modem::Accept::of(), {}, false);
+    rx.decode_early = early;
+    StreamRun out;
+    arq::SoftStore store;
+    std::shared_ptr<arq::ModemRx> m;
+    std::int64_t m_start = -1;
+    bool pending = false;
+    const std::size_t blk = config::FS / 50;
+    for (std::size_t i = 0; i < b.audio.size(); i += blk) {
+        const double t = now();
+        auto items = rx.feed_deferred(std::span<const double>(b.audio).subspan(i, std::min(blk, b.audio.size() - i)));
+        for (auto& it : items) {
+            if (std::holds_alternative<receiver::HeaderEvent>(it)) pending = true;
+            if (auto* q = std::get_if<receiver::PartialRequest>(&it)) {
+                auto r = receiver::receive_partial(*q, rx.accept());
+                if (!r) continue;
+                ++out.partials;
+                const double share = std::min(1.0, static_cast<double>(config::SPREAD_WINDOW) / r->n_frames());
+                arq::Heard h;
+                h.ofdm = std::make_shared<const modem::Received>(std::move(*r));
+                if (!m || m_start != q->header.start()) {
+                    m = std::make_shared<arq::ModemRx>(h, &store, dd_budget);
+                    m_start = q->header.start();
+                }
+                out.early += static_cast<int>(
+                    m->advance(std::move(h), dd_budget ? std::optional(*dd_budget * share) : std::nullopt).size());
+                continue;
+            }
+            auto* d = std::get_if<receiver::DecodeRequest>(&it);
+            if (!d) continue;
+            const auto start = d->header.start();
+            auto ev = receiver::decode(std::move(*d), rx.accept());
+            out.receive = ev.receive_ms / 1e3;
+            if (!ev.rx) return out;  // lost
+            auto& r = std::get<modem::Received>(*ev.rx);
+            if (r.n_cw != static_cast<int>(b.payloads.size())) return out;  // another burst's header
+            out.heard = true;
+            arq::Heard h;
+            h.ofdm = std::make_shared<const modem::Received>(std::move(r));
+            if (m && m_start == start) m->advance(h);
+            else m = std::make_shared<arq::ModemRx>(h, &store, dd_budget);
+            std::vector<arq::DecodeRequest> reqs;
+            for (int s = 0; s < h.ofdm->n_cw; ++s) reqs.push_back({s, arq::MaskId{7, 1, s}, 0, arq::SoftKey{false, 1, s, 0}});
+            m->prepare(reqs);
+            for (const auto& q : reqs) {
+                const auto got = m->decode(q.slot, q.mask, q.rv, &q.key);
+                out.ok += got && *got == b.payloads[static_cast<std::size_t>(q.slot)];
+            }
+            const auto meas = arq::measure(h);
+            const double tm = now();
+            (void)m->measure_data(meas);
+            out.mer = now() - tm;
+            out.end = now() - t;
+            return out;
+        }
+        if (pending) {
+            out.during += now() - t;
+            out.max_feed = std::max(out.max_feed, now() - t);
+        }
+    }
+    return out;
+}
+
 [[noreturn]] void usage(int code) {
     std::fprintf(code ? stderr : stdout,
                  "usage: data2g-bench-rx [--threads N] [--reps R] [--dd-budget S] BURST.d2gb ...\n"
                  "       data2g-bench-rx [--threads N] [--reps R] [--dd-budget S] --cpm MODE N_DATA SIGMA ...\n"
                  "  --cpm         a synthetic CPM burst, batch vs streamed end-of-burst latency (repeatable)\n"
+                 "  --stream      OFDM files through the streaming Receiver, decoded as the engine does: end latency\n"
+                 "  --no-early    with --stream: no decoding while the burst arrives\n"
                  "  --threads     the decode pool's size (default 4)\n"
                  "  --reps        runs per burst, the fastest reported (default 3)\n"
                  "  --dd-budget   seconds of DD per burst (default 1; 0: none; inf: no limit)\n");
@@ -300,14 +388,20 @@ CpmRun run_cpm(const std::string& mode, int n_data, double sigma, bool stream, s
 }
 
 // The streaming Receiver on Gaussian noise, 20 ms feeds: CPU per feed (the listening load per audio feed).
-bool sense_on = false;  // --sense: Receiver::sense (data2g_on_air, KISS channel access)
+bool engine_rx = false;  // --engine: arq::receive_accept() and arq::all_grids(), not every band and grid
 bool cwsense_on = BENCH_CWID;  // --no-cwsense: #134's tree without its detector (#135's listening load alone)
+
+std::string listen_bands;  // --bands w,w48: only these OFDM sync bands' modes (the CPM grids as ever)
 
 void listen(double seconds, bool cpm_only, int expect) {
     std::vector<std::string_view> grids;
     for (const auto& g : tables::CPM_GRIDS) grids.push_back(g.name);
-    receiver::Receiver rx(cpm_only ? modem::Accept{} : modem::Accept::of(), grids);
-    rx.sense = sense_on;
+    if (engine_rx) grids = arq::all_grids();
+    std::vector<std::string_view> names;
+    for (const auto& m : config::SUBMODES)
+        if (("," + listen_bands + ",").find("," + std::string(m.sync_band) + ",") != std::string::npos)
+            names.push_back(m.name);
+    receiver::Receiver rx(cpm_only ? modem::Accept{} : engine_rx ? arq::receive_accept() : listen_bands.empty() ? modem::Accept::of() : modem::Accept::of(names), grids);
 #if BENCH_CWID
     cwid::CwSense cw;
 #endif
@@ -348,9 +442,9 @@ void listen(double seconds, bool cpm_only, int expect) {
     for (double v : ts) sum += v;
     std::sort(ts.begin(), ts.end());
     const auto q = [&](double p) { return 1e6 * ts[static_cast<std::size_t>(p * (ts.size() - 1))]; };
-    std::printf("listen %s%s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
+    std::printf("listen %s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
                 "%zu feeds, %d windows\n",
-                cpm_only ? "cpm only" : "all bands", sense_on ? " +sense" : "", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
+                cpm_only ? "cpm only" : engine_rx ? "engine bands" : listen_bands.empty() ? "all bands" : listen_bands.c_str(), cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
                 1e6 * sum / ts.size(), 100 * sum / (ts.size() * 0.02), q(0.5), q(0.99), q(0.999), 1e6 * ts.back(),
                 ts.size(), windows);
 }
@@ -447,6 +541,7 @@ int main(int argc, char** argv) {
     double listen_s = 0;
     bool cpm_only = false, cw = false;
     int expect = 0, nod_n = 0;
+    bool stream = false, early = true;
     std::optional<double> dd_budget = arq::DD_BUDGET_S;
     std::vector<const char*> files;
     std::vector<std::tuple<std::string, int, double>> cpms;
@@ -461,13 +556,16 @@ int main(int argc, char** argv) {
         else if (a == "--threads" && more) threads = std::atoi(argv[++i]);
         else if (a == "--reps" && more) reps = std::max(1, std::atoi(argv[++i]));
         else if (a == "--listen" && more) listen_s = std::atof(argv[++i]);
+        else if (a == "--engine") engine_rx = true;
         else if (a == "--cpm-only") cpm_only = true;
+        else if (a == "--bands" && more) listen_bands = argv[++i];
         else if (a == "--expect" && more) expect = std::atoi(argv[++i]);
         else if (a == "--primed") primed_on = true;
         else if (a == "--cwid") cw = true;
+        else if (a == "--stream") stream = true;
+        else if (a == "--no-early") early = false;
         else if (a == "--nod" && more) nod_n = std::max(1, std::atoi(argv[++i]));
         else if (a == "--no-cwsense") cwsense_on = false;
-        else if (a == "--sense") sense_on = true;
         else if (a == "--shifter" && more) shifter_n = std::atoi(argv[++i]);
         else if (a == "--dd-budget" && more) {
             const std::string v = argv[++i];
@@ -498,8 +596,25 @@ int main(int argc, char** argv) {
                     1e3 * str.end, str.early, bat.ok == str.ok ? "" : "  (batch decoded differently!)");
     }
     if (files.empty()) return 0;
-    std::printf("%-44s %5s %7s %7s %8s %6s %8s %8s %8s %4s %7s %7s\n", "burst", "ok", "acq", "refine", "receive",
-                "soft", "prepare", "decode", "total", "dd", "plock", "primed");
+    if (stream) {
+        std::printf("%-44s %5s %8s %8s %6s %8s %8s %6s %6s\n", "burst (streamed, 20 ms feeds)", "ok", "end ms", "receive",
+                    "mer", "during", "maxfeed", "tried", "looks");
+        for (const char* path : files) {
+            const Burst b = load(path);
+            if (cpm::grid(b.band)) continue;  // OFDM only (CPM streams by --cpm)
+            StreamRun best;
+            for (int k = 0; k < reps; ++k) {
+                const StreamRun r = run_stream(b, early, dd_budget);
+                if (k == 0 || r.end < best.end) best = r;
+            }
+            std::printf("%-44s %2d/%-2zu %8.1f %8.1f %6.2f %8.1f %8.1f %6d %6d%s\n", b.name.c_str(), best.ok, b.payloads.size(),
+                        1e3 * best.end, 1e3 * best.receive, 1e3 * best.mer, 1e3 * best.during, 1e3 * best.max_feed, best.early,
+                        best.partials, best.heard ? "" : "  (not heard)");
+        }
+        return 0;
+    }
+    std::printf("%-44s %5s %7s %7s %8s %6s %8s %8s %6s %8s %4s %7s %7s\n", "burst", "ok", "acq", "refine", "receive",
+                "soft", "prepare", "decode", "mer", "total", "dd", "plock", "primed");
     for (const char* path : files) {
         const Burst b = load(path);
         Run best;
@@ -507,11 +622,11 @@ int main(int argc, char** argv) {
             const Run r = run(b, dd_budget);
             if (k == 0 || r.total() < best.total()) best = r;
         }
-        std::printf("%-44s %2d/%-2zu %7.1f %7.1f %8.1f %6.1f %8.1f %8.1f %8.1f %4d %7.1f %7.1f%s%s%s\n",
+        std::printf("%-44s %2d/%-2zu %7.1f %7.1f %8.1f %6.1f %8.1f %8.1f %6.2f %8.1f %4d %7.1f %7.1f%s%s%s\n",
                     b.name.c_str(), best.ok, b.payloads.size(), 1e3 * best.acq, 1e3 * best.refine,
-                    1e3 * best.receive, 1e3 * best.soft, 1e3 * best.prepare, 1e3 * best.decode, 1e3 * best.total(),
-                    best.refines, 1e3 * best.plock, 1e3 * best.primed, best.genie ? " genie" : "",
-                    best.plocked ? " plock" : "", best.pok ? " pok" : "");
+                    1e3 * best.receive, 1e3 * best.soft, 1e3 * best.prepare, 1e3 * best.decode, 1e3 * best.mer,
+                    1e3 * best.total(), best.refines, 1e3 * best.plock, 1e3 * best.primed,
+                    best.genie ? " genie" : "", best.plocked ? " plock" : "", best.pok ? " pok" : "");
     }
     return 0;  // also callable through the Android diagnostic program wrapper
 }

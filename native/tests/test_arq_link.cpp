@@ -41,7 +41,7 @@ public:
     int payload_bytes(const std::string& m) override { return m == "m4" ? 4 : m == "m22" ? 22 : 46; }
     int rv_cycle(const std::string& m) override { return m == "m4" ? 1 : 4; }
     double airtime(const std::string&, int n_cw, bool) override { return 0.4 + 0.12 * n_cw; }
-    std::string connect_mode(int, int) override { return "m46"; }
+    std::string connect_mode(int, int, bool) override { return "m46"; }
     std::string mode = "m22";
 };
 
@@ -181,7 +181,7 @@ void disc_reply_timer() {
     public:
         explicit SlowReply(std::string m) : TestPolicy(0), fixed(std::move(m)) {}
         std::string fixed;
-        std::string connect_mode(int, int) override { return fixed; }
+        std::string connect_mode(int, int, bool) override { return fixed; }
         double airtime(const std::string&, int n, bool) override { return 3.0 * n; }
     };
     for (bool master : {false, true}) for (const char* mode : {"m46", "m4"}) {

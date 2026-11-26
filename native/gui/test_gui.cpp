@@ -16,6 +16,7 @@
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include <QScrollBar>
 #include <QSettings>
 #include <QTableWidget>
 #include <QTcpServer>
@@ -24,6 +25,7 @@
 #include <QTextDocument>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QThread>
 
@@ -300,6 +302,37 @@ void test_settings(const QTemporaryDir& dir) {
     check::is_true(!legacy.contains("rigctld_port") && !legacy.contains("host"), "...and saving drops the old keys");
 }
 
+// The profile's settings file name (app/settings.cpp): data2g.conf, FM's data2g-fm.conf.
+QString conf_name() {
+    return config::PROFILE == "hf" ? QStringLiteral("data2g.conf") : QStringLiteral("data2g-fm.conf");
+}
+
+// open_config: a data2g.conf beside the program before the config dir's, and
+// --config's before both.
+void test_config_beside_program(const QTemporaryDir& dir) {
+    check::current_step = "config file beside the program";
+    const QString beside = QCoreApplication::applicationDirPath() + QStringLiteral("/") + conf_name();
+    if (QFile::exists(beside)) {
+        check::is_true(false, "no data2g.conf beside the test before it runs");
+        return;
+    }
+    struct Remove {
+        QString path;
+        ~Remove() { QFile::remove(path); }
+    } cleanup{beside};
+    QFile made(beside);
+    check::is_true(made.open(QIODevice::WriteOnly), "the test can write beside itself");
+    made.close();
+    char prog[] = "data2g-gui";
+    char* bare[] = {prog};
+    const QString other = dir.filePath(QStringLiteral("beside-other.conf"));
+    QByteArray other_arg = ("--config=" + other).toLocal8Bit();
+    char* with[] = {prog, other_arg.data()};
+    check::is_true(QFileInfo(app::open_config(1, bare)->fileName()) == QFileInfo(beside), "a data2g.conf beside the program is the one used");
+    check::is_true(QFileInfo(app::settings_store()->fileName()) == QFileInfo(beside), "...by settings_store() too");
+    check::is_true(QFileInfo(app::open_config(2, with)->fileName()) == QFileInfo(other), "--config over it");
+}
+
 // open_config: data2g.conf in the config dir, the old store moved to it once;
 // --config's file instead, with nothing moved.
 void test_config_file(const QTemporaryDir& dir) {
@@ -313,7 +346,7 @@ void test_config_file(const QTemporaryDir& dir) {
         old.setValue("mycall", QStringLiteral("OLD1"));
         old_file = old.fileName();
     }
-    const QString conf = dir.filePath(QStringLiteral("new/Data2G/data2g.conf"));
+    const QString conf = dir.filePath(QStringLiteral("new/Data2G/") + conf_name());
     char prog[] = "data2g-gui";
     char* bare[] = {prog};
     const QString other = dir.filePath(QStringLiteral("other.conf"));
@@ -322,8 +355,12 @@ void test_config_file(const QTemporaryDir& dir) {
     check::is_true(app::open_config(2, with)->fileName() == other && QFile::exists(old_file) && !QFile::exists(conf),
                    "--config: its file, nothing moved");
     const auto s = app::open_config(1, bare);
-    check::is_true(s->fileName() == conf && s->value("mycall").toString() == "OLD1" && !QFile::exists(old_file),
-                   "data2g-gui.conf moved to data2g.conf");
+    if (config::PROFILE == "hf")
+        check::is_true(s->fileName() == conf && s->value("mycall").toString() == "OLD1" && !QFile::exists(old_file),
+                       "data2g-gui.conf moved to data2g.conf");
+    else  // the old store was HF's: FM starts its own file and leaves it be
+        check::is_true(s->fileName() == conf && !s->contains("mycall") && QFile::exists(old_file),
+                       "FM: its own file, the old HF store left alone");
     check::is_true(app::settings_store()->fileName() == conf, "settings_store() opens the same file");
 #else
     (void)dir;
@@ -462,7 +499,7 @@ void test_window(const QTemporaryDir& dir) {
     QByteArray said;
     check::is_true(wait_for([&] {
                        said += client.readAll();
-                       return said.contains("CQFRAME N0CQ 2300");
+                       return said.contains(QByteArray::fromStdString("CQFRAME N0CQ " + arq::bw_name(2)));
                    }, 5000),
                    "the client heard CQFRAME");
     const app::AudioCounters c = w.station().counters();
@@ -598,6 +635,90 @@ void test_constellation_plot() {
     }
 }
 
+// The burst log stays pinned to the top (newest) by default even when a
+// previously selected row ages past MAX_LOG_ROWS and is trimmed (#294), and
+// keeps the visible row stationary when the user has scrolled down.
+void test_burst_log_scroll(const QTemporaryDir& dir) {
+    for (const auto mode : {QAbstractItemView::ScrollPerItem, QAbstractItemView::ScrollPerPixel}) {
+        const std::string tag = mode == QAbstractItemView::ScrollPerPixel ? "pixel" : "item";
+        check::current_step =
+            mode == QAbstractItemView::ScrollPerPixel ? "burst log scroll (pixel)" : "burst log scroll (item)";
+        app::Args a;
+        a.sample_rate = 1;  // rejected by app::check: no audio device or ports opened
+        QSettings store(dir.filePath(QStringLiteral("scroll-%1.ini").arg(QString::fromStdString(tag))), QSettings::IniFormat);
+        gui::MainWindow w(a, store);
+        w.resize(720, 560);
+        w.show();
+        QCoreApplication::processEvents();
+        auto* log = w.findChild<QTableWidget*>(QStringLiteral("burst_log"));
+        check::is_true(log != nullptr, "burst_log found");
+        if (!log) return;
+        log->setVerticalScrollMode(mode);
+        QScrollBar* bar = log->verticalScrollBar();
+
+        int next_id = 0;
+        const auto make_bursts = [&](int n) {
+            std::vector<app::BurstLogEntry> out;
+            out.reserve(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) {
+                app::BurstLogEntry e;
+                e.when = std::chrono::system_clock::now();
+                e.mode = "b" + std::to_string(next_id++);
+                e.n_cw = 1;
+                e.decoded = 1;
+                e.snr_db = 5.0;
+                out.push_back(std::move(e));
+            }
+            return out;
+        };
+        const auto top_text = [&] {
+            const int r = log->rowAt(0);
+            return r >= 0 && log->item(r, 1) ? log->item(r, 1)->text().toStdString() : std::string();
+        };
+
+        // 1. Growing (< MAX_LOG_ROWS): default stays pinned at the top (newest).
+        w.append_bursts(make_bursts(30));
+        QCoreApplication::processEvents();
+        check::equal(bar->value(), bar->minimum(), tag + ": starts pinned at top");
+        check::equal(top_text(), std::string("b29 x1"), tag + ": newest at top");
+
+        // 2. Scrolled down while still below MAX_LOG_ROWS: stays anchored on the same burst.
+        bar->setValue(bar->maximum());
+        QCoreApplication::processEvents();
+        const std::string anchored_grow = top_text();
+        check::is_true(!anchored_grow.empty() && bar->value() > bar->minimum(), tag + ": scrolled to bottom");
+        w.append_bursts(make_bursts(3));
+        QCoreApplication::processEvents();
+        check::equal(top_text(), anchored_grow, tag + ": scrolled view stays anchored while growing");
+
+        // 3. Regression #294: click row 0, let it drift to the oldest row and be trimmed at MAX_LOG_ROWS.
+        bar->setValue(bar->minimum());
+        log->setCurrentCell(0, 0);
+        QCoreApplication::processEvents();
+        w.append_bursts(make_bursts(gui::MainWindow::MAX_LOG_ROWS - log->rowCount()));
+        QCoreApplication::processEvents();
+        // Now the table is full; put currentIndex on the very last row, scroll to top, and append.
+        log->setCurrentCell(log->rowCount() - 1, 0);
+        bar->setValue(bar->minimum());
+        QCoreApplication::processEvents();
+        w.append_bursts(make_bursts(1));
+        QCoreApplication::processEvents();
+        check::equal(log->rowCount(), gui::MainWindow::MAX_LOG_ROWS, tag + ": capped at MAX_LOG_ROWS");
+        check::equal(bar->value(), bar->minimum(), tag + ": trimming current row at bottom does not yank to bottom");
+        check::equal(log->currentRow(), -1, tag + ": trimmed currentIndex cleared");
+        check::equal(top_text(), "b" + std::to_string(next_id - 1) + " x1", tag + ": newest still visible at top");
+
+        // 4. Mid-scroll when full + currentRow trimmed: stays anchored on the same burst.
+        log->setCurrentCell(log->rowCount() - 1, 0);
+        bar->setValue(bar->maximum() / 2);
+        QCoreApplication::processEvents();
+        const std::string anchored_full = top_text();
+        w.append_bursts(make_bursts(3));
+        QCoreApplication::processEvents();
+        check::equal(top_text(), anchored_full, tag + ": mid-scroll stays anchored across trim");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -609,6 +730,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QTemporaryDir dir;
     test_settings(dir);
+    test_config_beside_program(dir);
     test_config_file(dir);
     test_noise_rule_slider();
     test_decoder_effort();
@@ -616,6 +738,7 @@ int main(int argc, char** argv) {
     test_restart_warning();
     test_waterfall_tx();
     test_constellation_plot();
+    test_burst_log_scroll(dir);
     test_window(dir);
     return check::report("gui");
 }

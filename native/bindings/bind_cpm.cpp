@@ -105,26 +105,18 @@ void bind_cpm(py::module_& m) {
         return np(cpm::energies(grid(g), view(x), start, n_sym, cfo, extra));
     }, py::arg("grid"), py::arg("x"), py::arg("start"), py::arg("n_sym"), py::arg("cfo"), py::arg("extra") = 0);
     c.def("shares", [](const In<double>& E) { return np(cpm::shares(mat(E))); });
-    c.def("presence", [](const std::string& g, const In<double>& x, double reach_hz) {
-        return cpm::presence(grid(g), view(x), reach_hz);
-    }, py::arg("grid"), py::arg("x"), py::arg("reach_hz") = 150.0);
-    c.def("present", [](const std::string& g, const In<double>& x) { return cpm::present(grid(g), view(x)); });
-    py::class_<cpm::PresenceTrack>(c, "PresenceTrack")
-        .def(py::init([](const std::string& g, double reach_hz) { return new cpm::PresenceTrack(grid(g), reach_hz); }),
+    py::class_<cpm::CoarseTrack>(c, "CoarseTrack")
+        .def(py::init([](const std::string& g, double reach_hz) { return cpm::CoarseTrack(grid(g), reach_hz); }),
              py::arg("grid"), py::arg("reach_hz") = 150.0)
-        .def("reset", &cpm::PresenceTrack::reset)
-        .def("feed", [](cpm::PresenceTrack& t, const In<double>& x, std::int64_t off, std::int64_t lo) {
-            t.feed(view(x), off, lo);
-        })
-        .def("value", &cpm::PresenceTrack::value)
-        .def("present", &cpm::PresenceTrack::present)
-        .def_readonly("n", &cpm::PresenceTrack::n);
+        .def("feed", [](cpm::CoarseTrack& t, const In<double>& buf, long off) { t.feed(view(buf), off); })
+        .def_readonly("extra", &cpm::CoarseTrack::extra);
     c.def("detect", [](const std::string& g, const In<double>& x, double reach_hz, bool fine, bool front_only, int n_sym,
-                       double floor, bool mid) {
-        const auto d = cpm::detect(grid(g), view(x), reach_hz, fine, front_only, n_sym, floor, mid);
+                       double floor, bool mid, const cpm::CoarseTrack* track, long x0) {
+        const auto d = cpm::detect(grid(g), view(x), reach_hz, fine, front_only, n_sym, floor, mid, track, x0);
         return py::make_tuple(d.score, d.start, d.cfo);
     }, py::arg("grid"), py::arg("x"), py::arg("reach_hz") = 150.0, py::arg("fine") = true,
-       py::arg("front_only") = false, py::arg("n_sym") = 0, py::arg("floor") = -1.0, py::arg("mid") = false);
+       py::arg("front_only") = false, py::arg("n_sym") = 0, py::arg("floor") = -1.0, py::arg("mid") = false,
+       py::arg("track") = nullptr, py::arg("x0") = 0);
     c.def("llrs", [](const std::string& g, const In<double>& E) { return np(cpm::llrs(grid(g), mat(E))); });
     c.def("symbol_ll", [](const std::string& g, const In<double>& E) { return np(cpm::symbol_ll(grid(g), mat(E))); });
     c.def("read_header", [](const std::string& g, const In<double>& x, long s0, double cfo, int copies) {
@@ -172,10 +164,12 @@ void bind_cpm(py::module_& m) {
         return d;
     };
     c.def("find", [lock_dict](const std::string& g, const In<double>& x, std::optional<double> threshold,
-                              double reach_hz, bool front_only, long lo, std::optional<long> hi, bool wait) {
-        return lock_dict(cpm::find(grid(g), view(x), threshold, reach_hz, front_only, lo, hi, wait));
+                              double reach_hz, bool front_only, long lo, std::optional<long> hi, bool wait,
+                              const cpm::CoarseTrack* track, long x0) {
+        return lock_dict(cpm::find(grid(g), view(x), threshold, reach_hz, front_only, lo, hi, wait, track, x0));
     }, py::arg("grid"), py::arg("x"), py::arg("threshold") = py::none(), py::arg("reach_hz") = 150.0,
-       py::arg("front_only") = true, py::arg("lo") = 0, py::arg("hi") = py::none(), py::arg("wait") = false);
+       py::arg("front_only") = true, py::arg("lo") = 0, py::arg("hi") = py::none(), py::arg("wait") = false,
+       py::arg("track") = nullptr, py::arg("x0") = 0);
     c.def("late_lock", [lock_dict](const std::string& g, const In<double>& x, long start, double cfo, double score,
                                    long header_end) {
         cpm::Lock cand{};
@@ -186,9 +180,11 @@ void bind_cpm(py::module_& m) {
         cand.header_end = cand.end = header_end;
         return lock_dict(cpm::late_lock(grid(g), view(x), cand));
     }, py::arg("grid"), py::arg("x"), py::arg("start"), py::arg("cfo"), py::arg("score"), py::arg("header_end"));
-    c.def("find_mid", [lock_dict](const std::string& g, const In<double>& x, long lo, std::optional<long> hi) {
-        return lock_dict(cpm::find_mid(grid(g), view(x), lo, hi));
-    }, py::arg("grid"), py::arg("x"), py::arg("lo") = 0, py::arg("hi") = py::none());
+    c.def("find_mid", [lock_dict](const std::string& g, const In<double>& x, long lo, std::optional<long> hi,
+                                  const cpm::CoarseTrack* track, long x0) {
+        return lock_dict(cpm::find_mid(grid(g), view(x), lo, hi, track, x0));
+    }, py::arg("grid"), py::arg("x"), py::arg("lo") = 0, py::arg("hi") = py::none(), py::arg("track") = nullptr,
+       py::arg("x0") = 0);
     c.def("prime_lock", [lock_dict](const std::string& g, const In<double>& x, long lo, long hi, double cfo) {
         return lock_dict(cpm::prime_lock(grid(g), view(x), lo, hi, cfo));
     });
@@ -207,6 +203,7 @@ void bind_cpm(py::module_& m) {
     // --- coherent detection ---
     c.attr("COH_W") = cpm::COH_W;
     c.attr("COH_HDR_W") = cpm::COH_HDR_W;
+    c.attr("FLOOR_SIGMAS") = cpm::FLOOR_SIGMAS;
     c.attr("COH_PREGATE") = py::make_tuple(cpm::COH_PREGATE[0], cpm::COH_PREGATE[1]);
     c.def("coh_lock", [](const std::string& g) -> py::object {  // cpm.COH_LOCK's tuple, or None
         const auto v = cpm::coh_lock(grid(g));

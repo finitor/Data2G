@@ -1,6 +1,6 @@
 # Data2G User's Guide
 
-For Data2G 0.5.2.
+For Data2G 0.5.3.
 
 Data2G is a data modem for HF amateur radio. It turns the audio going in and out of your SSB transceiver into a reliable data link, so that other programs can chat, send email, or move files over the air. It is free, open source, and has no speed restrictions.
 
@@ -68,8 +68,8 @@ Downloads are on the [Releases page](https://github.com/arodland/Data2G/releases
 
 Download one of:
 
-- `data2g-0.5.2-windows-x64-setup.exe`: the installer. It installs to `C:\Program Files\Data2G`, adds a Start Menu entry, and can add a desktop shortcut. It needs administrator rights.
-- `data2g-0.5.2-windows-x64-portable.zip`: no installation. Unzip it anywhere and run `data2g-gui.exe`.
+- `data2g-0.5.3-windows-x64-setup.exe`: the installer. It installs to `C:\Program Files\Data2G`, adds a Start Menu entry, and can add a desktop shortcut. It needs administrator rights.
+- `data2g-0.5.3-windows-x64-portable.zip`: no installation. Unzip it anywhere and run `data2g-gui.exe`.
 
 The Start Menu entry opens the GUI. The other programs (`data2g-host.exe`, `data2g-web.exe`) are in the same folder and are run from a Command Prompt or PowerShell window.
 
@@ -77,8 +77,8 @@ The Start Menu entry opens the GUI. The other programs (`data2g-host.exe`, `data
 
 Download the `.dmg` for your Mac:
 
-- `data2g-0.5.2-macos-arm64.dmg` for Apple Silicon (M1 and later).
-- `data2g-0.5.2-macos-x86_64.dmg` for Intel Macs.
+- `data2g-0.5.3-macos-arm64.dmg` for Apple Silicon (M1 and later).
+- `data2g-0.5.3-macos-x86_64.dmg` for Intel Macs.
 
 Open it and drag Data2G to Applications. The first time Data2G opens the sound card, macOS asks for permission to use the microphone. Say yes: that is how Data2G hears your radio.
 
@@ -93,22 +93,22 @@ The command-line programs live inside the app bundle:
 
 Download the AppImage for your machine:
 
-- `data2g-0.5.2-linux-x86_64.AppImage` for Intel and AMD PCs.
-- `data2g-0.5.2-linux-aarch64.AppImage` for 64-bit ARM, including the Raspberry Pi 4 and 5.
-- `data2g-0.5.2-linux-armhf.AppImage` for 32-bit ARM: a Raspberry Pi running a 32-bit OS (section 10).
+- `data2g-0.5.3-linux-x86_64.AppImage` for Intel and AMD PCs.
+- `data2g-0.5.3-linux-aarch64.AppImage` for 64-bit ARM, including the Raspberry Pi 4 and 5.
+- `data2g-0.5.3-linux-armhf.AppImage` for 32-bit ARM: a Raspberry Pi running a 32-bit OS (section 10).
 
 Make it executable and run it:
 
 ```
-chmod +x data2g-0.5.2-linux-x86_64.AppImage
-./data2g-0.5.2-linux-x86_64.AppImage
+chmod +x data2g-0.5.3-linux-x86_64.AppImage
+./data2g-0.5.3-linux-x86_64.AppImage
 ```
 
 With no arguments the AppImage opens the GUI. Put `host` or `web` first to run one of the other front ends:
 
 ```
-./data2g-0.5.2-linux-x86_64.AppImage host --help
-./data2g-0.5.2-linux-x86_64.AppImage web
+./data2g-0.5.3-linux-x86_64.AppImage host --help
+./data2g-0.5.3-linux-x86_64.AppImage web
 ```
 
 There is also a `.tar.gz` for each architecture. Unpack it and run the `data2g` launcher inside, which takes the same `host` and `web` arguments.
@@ -144,6 +144,8 @@ The settings file is `data2g.conf`, in:
 | Windows | `%LOCALAPPDATA%\Data2G` |
 | macOS | `~/Library/Preferences/Data2G` |
 | Linux | `~/.config/Data2G` |
+
+If a `data2g.conf` sits in the same folder as the program, Data2G uses that file instead. This is for a client such as RMS Trimode that starts one modem per radio and cannot pass `--config`: make one copy of the Data2G folder per radio, somewhere you can write to (not `Program Files`), and put a `data2g.conf` in each. An empty file will do. Start each copy once by hand and set its sound card, rig and KISS port, which must differ between copies. Then point each of the client's channels at its own copy.
 
 ### The GUI
 
@@ -253,6 +255,8 @@ data2g-host --mycall W1AW --input-device "USB Audio" --output-device "USB Audio"
 
 Software-defined radios driven by ExpertSDR, Thetis, AetherSDR and similar programs can offer a TCI server. TCI carries audio, PTT and the dial frequency over one network connection, so no sound card or CAT setup is needed. Choose **TCI** as the radio interface and enter the server's address (the default is `localhost:50001`). The sample rate must be 8000, 24000 or 48000.
 
+On the headless host, a sound card or radio flag on the command line (`--input-device`, `--output-device`, `--audio-io`, `--rig-model`, `--rig-device`, `--ptt-method`, `--ptt-device`) turns TCI off even when the saved settings have it on.
+
 ### Setting up the radio itself
 
 - Use upper sideband, or your radio's USB data mode.
@@ -262,6 +266,20 @@ Software-defined radios driven by ExpertSDR, Thetis, AetherSDR and similar progr
 - Set the transmit level so that the radio reaches the power you want with little or no ALC action. Overdriving makes your signal wider and harder to decode, not stronger.
 - Set the receive level using the meter on the right edge of the waterfall (section 7). Band noise should sit well up the bar in the green, and **CLIP** should never appear.
 - Data2G transmissions can be long and close to full power for their whole length. Respect your radio's duty cycle rating. Many 100 W radios are happier at 30 to 50 W on data.
+
+### FM radios (VHF/UHF)
+
+These notes apply to the FM build of Data2G.
+
+- **Where it is.** The same download holds both. Start **Data2G FM** from its own shortcut (Windows), app (macOS) or desktop entry (Linux; from the AppImage, `Data2G.AppImage fm`). Its programs are `data2g-fm`, `data2g-host-fm` and `data2g-web-fm`. It keeps its own settings, in `Data2G/data2g-fm.conf` beside the HF profile's `data2g.conf`. Both use the same default ports, which client applications expect, so to run HF and FM at once, change the ports of one of them (and in the client that uses it).
+
+- **TX path.** Set **TX path** to **flat** for a radio's 9600 or data port (no pre-emphasis), and to **mic** for a microphone or speaker-mic input. A ping says when this looks wrong.
+- **Ping.** Ping another station before a session (`PING call` on the host's command port). One exchange measures both directions, and reports how much audio band the path carries (NARROW or WIDE) and whether your transmit level suits your radio. Follow its advice on the level.
+- **Bandwidth.** Many radios' audio paths stop near 3.4 kHz. WIDE needs a flat path at both ends, such as 9600 ports or a receiver's IF output. If a ping says "NARROW only", use NARROW.
+- **Radios tested so far:**
+  - **IC-9700**: DATA MOD USB, USB MOD level about 10% (at 40% its limiter distorts the signal and throughput drops by about a quarter). Its USB AF output carries NARROW only; for WIDE use "USB Output IF".
+  - **TH-D75** through an AIOC: mic level high, PTT on the AIOC's serial port with DTR high and RTS low. Its receive audio limits S/N to about 15 dB, which caps the speed of anything sent to it.
+  - **FT-8800R** through a DigiRig: data port set to 9600, TX path flat. Turn off the DigiRig sound chip's **Auto Gain Control** (in `alsamixer` or your mixer): left on, it overloads the input from a 9600 port even at the lowest gain.
 
 ### Your callsign
 
@@ -463,7 +481,7 @@ The square plot beside the waterfall shows the last burst as the demodulator saw
 
 ### BUSY and PTT indicators
 
-- **BUSY** lights amber while Data2G hears a signal on the frequency, including a Data2G transmission whose start it missed. Data2G holds back new calls and broadcasts while it is lit, so that it doesn't transmit over someone. Connected applications see it too, and many refuse to start a call while the channel is busy.
+- **BUSY** lights amber while Data2G hears a signal on the frequency. Data2G holds back new calls and broadcasts while it is lit, so that it doesn't transmit over someone. Connected applications see it too, and many refuse to start a call while the channel is busy.
 - **PTT** lights red while Data2G is transmitting.
 
 ### Buttons
@@ -557,7 +575,7 @@ A few options have no place in the dialogs. The ones an operator might want:
 | `--kiss-bw 500` | Limits KISS and broadcast transmissions to 500 Hz modes. The default is 2400. |
 | `--broadcast-mode MODE` | The submode for broadcast packets when the application doesn't choose one. The default is `qpsk-r1/5`, or `n10-qpsk-r1/5` with `--kiss-bw 500`. |
 | `--kiss-busy-limit S` | A broadcast held back by a busy channel is sent anyway after this many seconds. The default is 60. |
-| `--dd-budget S` | Time allowed per burst for an extra decoding pass that tracks fast fading. The default is 1 second. Lower it, down to 0, on a slow machine. |
+| `--dd-budget S` | Time allowed per burst for an extra decoding pass that tracks fast fading. The default is 1 second. In a session it also stops when your reply is due. 0 turns it off. |
 | `--threads N` | CPU threads used for decoding. The default is every core up to 4, 4 threads for 5 to 8 cores, and half the cores above 8. |
 | `--log-level DEBUG` | A much more detailed log. |
 | `--config FILE` | Use a different settings file. |
@@ -675,7 +693,7 @@ Listening is not the problem. On a Pi 4, searching for signals takes about half 
 For a Pi with no screen, run the web UI and do everything else from a browser:
 
 ```
-./data2g-0.5.2-linux-aarch64.AppImage web --web-listen 0.0.0.0
+./data2g-0.5.3-linux-aarch64.AppImage web --web-listen 0.0.0.0
 ```
 
 The first run asks for a password. Then open `http://<the Pi's address>:8400/` from another computer and set up the radio on the Settings tab. Once it is configured you can keep using the web UI, or switch to `host` for the lowest overhead.
@@ -688,7 +706,7 @@ Try these in order, and stop when the audio counters stay at zero and fast links
 
 1. **Run headless.** Use `web` or `host` instead of the GUI. If you do run the GUI, right-click the waterfall and choose 1 or 2 fps, and turn off **Live constellation**.
 2. **Lower Decoder effort** to 20, then 15.
-3. **Lower the DD budget.** Start Data2G with `--dd-budget 0.5`, then `--dd-budget 0` if that isn't enough. This limits an extra decoding pass that helps in fast fading. At 0 you give up a decibel or two of sensitivity on fading signals.
+3. **Lower the DD budget.** In a session this pass already stops when your reply is due, so try this only for broadcast (KISS) traffic or if links still stall. Start Data2G with `--dd-budget 0.5`, then `--dd-budget 0` if that isn't enough. This limits an extra decoding pass that helps in fast fading. At 0 you give up a decibel or two of sensitivity on fading signals.
 4. **Try fewer threads.** Data2G decodes on all four cores of a Pi 4. If the Pi also runs other programs, `--threads 2` leaves them room, at the cost of slower decodes.
 
 Other things that matter on a Pi:

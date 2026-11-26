@@ -2,6 +2,7 @@
 passes for a front (c8r50's once repeated the front's Costas array)."""
 
 import numpy as np
+import pytest
 
 from data2g import codes, cpm
 
@@ -138,6 +139,7 @@ def test_a_lock_before_the_buffer_is_a_miss(monkeypatch):
     assert cpm.find(g, x) is None
 
 
+@pytest.mark.hf_only("seed-picked draws at an HF-calibrated SNR on HF channels; FM picks its own on fmchannel")
 def test_cpm_control_padding_is_known_when_it_fails(monkeypatch):
     """CPM's control is a polar codeword: its payload enters the code
     reversed (codes.polar_order), so a short control's padding sits on the
@@ -168,27 +170,6 @@ def test_cpm_control_padding_is_known_when_it_fails(monkeypatch):
         assert rx.decode(0, ctl_mask(0, 0, 7), 0, None) == ctl
 
 
-def test_presence_track_reads_presence_of_its_window():
-    """The streaming tracker, fed odd-sized chunks with the buffer's start
-    jumping (a burst handled), reads presence() of its window from a
-    multiple of T / PRESENCE_PHASES: each symbol once, the same value."""
-    from data2g.config import FS
-
-    rng = np.random.default_rng(2)
-    for g in cpm.GRIDS.values():
-        s = cpm.bandpass(g, cpm.tones(g, rng.integers(0, g.m, int(4 * g.rate))))
-        y = np.concatenate([rng.normal(size=3 * FS), s + rng.normal(scale=1.5, size=len(s)), rng.normal(size=2 * FS)])
-        t, end, off, q = cpm.PresenceTrack(g), 0, 0, g.T // cpm.PRESENCE_PHASES
-        while end < len(y):
-            end = min(len(y), end + int(rng.integers(500, 4000)))
-            if rng.random() < 0.1:
-                off = max(off, end - int(rng.integers(FS, 3 * FS)))
-            lo = max(off, end - 3 * FS)
-            t.feed(y[off:end], off, lo)
-            assert t.n == (end - lo) // g.T
-            np.testing.assert_allclose(t.value(), cpm.presence(g, y[-(-lo // q) * q:end]), rtol=0, atol=1e-12)
-
-
 def test_spread_tracks_doppler_through_symbol_jitter():
     """cpm.spread: a Rayleigh tone's energy per symbol plus white jitter as
     strong as the fading (what defeated the old lag-1 estimate: 3.0 always)."""
@@ -210,3 +191,145 @@ def test_spread_tracks_doppler_through_symbol_jitter():
     assert cpm.spread(g, s * rng.exponential(1.0, 400) + n0, n0) == cpm.SPREAD_MAX_HZ
     assert cpm.spread(g, awgn, n0) == 0.0
     assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short
+
+
+def _faded_control_energies(name, doppler, delay_ms, snr, seed):
+    """A control-only burst (a robust CONNECT's shape) through two-path
+    fading, at genie timing: its tone energies."""
+    from data2g import hfchannel as H
+
+    spec = cpm.SPECS[name]
+    g = cpm.GRIDS[spec.grid]
+    ctl = codes.encode(cpm.CTL[g.name], bytes(range(codes.payload_bytes(cpm.CTL[g.name]))), 0, 0)
+    x = cpm.modulate(spec, [ctl], dup=False)
+    y = H.awgn(H.fading(x, H.FadingPreset("p", doppler, delay_ms), seed=seed), snr, seed=seed + 1, s_power=H.active_power(x))
+    return g, cpm.soft(g, spec, y, 0, 0.0, 0, False)[1]
+
+
+@pytest.mark.hf_only("CPM: FM has none")
+def test_spread_on_slow_selective_fading():
+    """With multipath each tone has its own gain, so on slow fading the
+    winning tone's energy varies with the data, not with time: no lag
+    correlation, and the excess variance read SPREAD_MAX_HZ (fsk16r25, 2 ms
+    / 0.1 Hz, these 40 seeds: 35; 2 ms / 1 Hz: 10; fsk8r50: 25 and 2), which
+    is ROBUST_FAST's fast fading. The symbols on the same or adjacent tones
+    80-160 ms apart are correlated there (SPREAD_NEAR_*): unmeasured.
+    Really fast fading still reads it, 10 Hz too: its energies are
+    correlated over a symbol or two, not over 80 ms (pairs from the next
+    symbol on read 10 Hz as slow in about 1 burst in 10 of fsk16r25's and 1
+    in 3 of fsk8r50's)."""
+    def count(name, doppler, delay_ms, snr):
+        est = []
+        for seed in range(40):
+            g, E = _faded_control_energies(name, doppler, delay_ms, snr, seed)
+            est.append(cpm.measure(g, E, len(E))["spread_est"])
+        return sum(e == cpm.SPREAD_MAX_HZ for e in est), sum(e == cpm.UNMEASURED_SPREAD_HZ for e in est)
+
+    # (maxed, unmeasured) of 40; in the comments: as measured
+    assert count("fsk16r25-r1/2", 0.1, 2.0, 2)[0] <= 5  # 3
+    assert count("fsk16r25-r1/2", 1.0, 2.0, 2)[0] <= 5  # 2
+    assert count("fsk8r50-r1/3", 0.1, 2.0, 2)[0] <= 3  # 1
+    for name, doppler, delay_ms, least, most_unmeasured in (
+            ("fsk16r25-r1/2", 10.0, 7.0, 37, 1),  # 38, 0 (38 without the check)
+            ("fsk16r25-r1/2", 10.0, 2.0, 38, 1),  # 39, 0 (39)
+            ("fsk16r25-r1/2", 30.0, 7.0, 39, 1),  # 40, 0 (40)
+            ("fsk8r50-r1/3", 10.0, 7.0, 19, 1),  # 20, 0 (20; the rest are fits)
+            ("fsk8r50-r1/3", 30.0, 7.0, 35, 4)):  # 37, 3 (40)
+        maxed, unmeasured = count(name, doppler, delay_ms, 0)
+        assert maxed >= least and unmeasured <= most_unmeasured, (name, doppler, delay_ms, maxed, unmeasured)
+
+
+@pytest.mark.hf_only("CPM: FM has none")
+def test_coarse_track_is_a_fresh_transform_of_the_stream(pure):  # (native's: test_native_cpm's test_coarse_track)
+    """A receiver's CoarseTrack, fed 20 ms at a time from a buffer trimmed
+    behind it: its rows are coarse_rows of the stream at each phase's
+    stream-grid starts, as if transformed afresh (to rounding: pocketfft's
+    result depends on the batch a row is transformed in), and detect
+    reading them finds what detect over the same audio on that grid finds."""
+    rng = np.random.default_rng(5)
+    for g in cpm.GRIDS.values():
+        x = rng.normal(0, 1, 4 * 8000)
+        track, off, buf = cpm.CoarseTrack(g), 0, np.zeros(0)
+        for i in range(0, len(x), 160):
+            buf = np.concatenate([buf, x[i:i + 160]])
+            if len(buf) > 8000:  # trimmed to the last second, as a receiver's buffer
+                off, buf = off + len(buf) - 8000, buf[len(buf) - 8000:]
+            track.feed(buf, off)
+        a, b = off + 37, off + len(buf) - 11
+        for s, E in track.rows(a, b):
+            want = cpm.coarse_rows(g, x[a + s:b], track.extra)
+            assert len(E) == len(want) and len(E) > 10 and (a + s) % (g.T // 4) == 0, g.name
+            np.testing.assert_allclose(E, want, rtol=1e-12, atol=0)
+        ph = min(s for s, _ in track.rows(a, b))  # the stream grid's first start at or after a
+        kw = dict(front_only=True, fine=False)  # (the whole pattern is longer than the second held)
+        got, ref = cpm.detect(g, x[a:b], track=track, x0=a, **kw), cpm.detect(g, x[a + ph:b], **kw)
+        assert ref[0] > 0 and got[1:] == (ref[1] + ph, ref[2]) and got[0] == pytest.approx(ref[0], rel=1e-12), g.name
+
+
+def _carrier_burst(seed, snr_db=-8.0, carrier_hz=1573.4, inr_db=12.0):
+    """A one-control fsk16r25 burst in white noise (SNR in 2500 Hz) with a
+    steady carrier `inr_db` over the noise in 50 Hz (None: no carrier)."""
+    from data2g.arq import burst as B, phy as PHY
+    from data2g.config import FS
+
+    rng = np.random.default_rng(seed)
+    payload = rng.bytes(codes.payload_bytes(cpm.CTL["c16r25"]))
+    mask = B.ctl_mask(0, 0, 5)
+    x = PHY.tx_audio(B.TxBurst("fsk16r25-r1/2", [B.Slot(mask, 0, payload)], 0, 2))
+    sigma2 = float(np.mean(x * x)) * (FS / 2) / 2500 / 10 ** (snr_db / 10)
+    y = np.concatenate([np.zeros(4000), x, np.zeros(4000)]) + rng.normal(0, np.sqrt(sigma2), len(x) + 8000)
+    if inr_db is not None:
+        amp = np.sqrt(2 * sigma2 * 50 / (FS / 2) * 10 ** (inr_db / 10))
+        y = y + amp * np.cos(2 * np.pi * carrier_hz * np.arange(len(y)) / FS + rng.uniform(0, 2 * np.pi))
+    return y, mask, payload
+
+
+def test_tone_floors_only_where_a_tone_stands_out():
+    rng = np.random.default_rng(1)
+    hits = 0
+    for n in (22, 90, 240):  # a header read, a control codeword, a data codeword
+        for _ in range(1000):
+            E = rng.exponential(1.0, (n, 16))
+            hits += cpm.tone_floors(E, cpm._n0(E)) is not None
+    assert hits <= 3  # noise alone: under 1 in 1000
+    E = rng.exponential(1.0, (90, 16))
+    E[:, 5] += 8.0  # a carrier in tone 5
+    nb = cpm.tone_floors(E, cpm._n0(E))
+    assert nb is not None and nb[5] > 5 * cpm._n0(E)
+    assert np.all(np.delete(nb, 5) == cpm._n0(E))
+
+
+def test_a_steady_carrier_in_the_passband_does_not_stop_the_burst():
+    """One N0 for every tone let a carrier win its tone in every symbol
+    (tone_metric, coh_metric): no fsk16r25 burst decoded at 5 dB over the
+    AWGN floor. With the tone's own floor (tone_floors) they do."""
+    from data2g.arq import phy as PHY
+    from data2g.receiver import receive_any
+
+    for hz in (1330.0, 1573.4, 1690.0):
+        for seed in range(3):
+            y, mask, payload = _carrier_burst(seed, carrier_hz=hz)
+            r = receive_any(y, lead=8000, cpm_grids=("c16r25",))
+            assert r is not None and r["spec"].name == "fsk16r25-r1/2", (hz, seed)
+            assert PHY.ModemRx(r, {}).decode(0, mask, 0, None) == payload, (hz, seed)
+
+
+@pytest.mark.hf_only("CPM: FM has none")
+def test_a_carrier_does_not_read_as_signal_in_snr_est():
+    """measure() took each row's strongest tone as signal: a carrier that
+    wins its tone read 2-8 dB high (12-24 dB in 50 Hz), and the gear
+    shifter climbed. Scaled to the quiet tones' floor, Es scaled back up
+    by the share kept, it reads within about 1 dB (a low read costs
+    sessions too)."""
+    from data2g.arq import phy as PHY
+    from data2g.receiver import receive_any
+
+    def est(seed, **kw):
+        y, *_ = _carrier_burst(seed, **kw)
+        return PHY.measure(receive_any(y, lead=8000, cpm_grids=("c16r25",)))["snr_est"]
+
+    for seed in range(2):
+        clean = est(seed, inr_db=None)
+        for hz, inr, low in ((1573.4, 12.0, -1.0), (1330.0, 18.0, -1.5)):  # before: +2.0..+2.5, +5.4..+6.0
+            d = est(seed, carrier_hz=hz, inr_db=inr) - clean
+            assert low < d < 0.5, (seed, hz, inr, d)

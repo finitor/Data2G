@@ -429,6 +429,11 @@ def modulate(spec: CpmSpec, coded: list, dup: bool, cap: int = 0) -> np.ndarray:
 
 # --- receive -------------------------------------------------------------------------
 
+def _sq(Z: np.ndarray) -> np.ndarray:
+    """|Z|^2 as re^2 + im^2 (within an ulp of np.abs(Z) ** 2, without its hypot)."""
+    return Z.real ** 2 + Z.imag ** 2
+
+
 def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra: int = 0) -> np.ndarray:
     """(n_sym, m + 2 extra) tone energies of symbols from `start`, CFO removed."""
     T = g.T
@@ -440,7 +445,7 @@ def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra:
     t = (start + np.arange(len(seg))) / FS
     z = seg * np.exp(-2j * np.pi * (g.f0 - extra * g.rate + cfo) * t)  # lowest bin at DC
     Z = np.fft.fft(z.reshape(n_sym, T), axis=1)
-    return np.abs(Z[:, :g.m + 2 * extra]) ** 2
+    return _sq(Z[:, :g.m + 2 * extra])
 
 
 def _shares(E: np.ndarray) -> np.ndarray:
@@ -450,118 +455,66 @@ def _shares(E: np.ndarray) -> np.ndarray:
     return E / (E.sum(axis=1, keepdims=True) + 1e-30)
 
 
-# Receiver.data2g_on_air's rule (present, scripts/presence_study.py, 2026-11-17):
-# presence at least a + b / sqrt(n) over n symbols, per grid (noise passes
-# 2e-4 of search hops from PRESENCE_MIN_S to the whole window); tones, CW
-# and Hands at 0 and +20 dB passed 0-10%.
-PRESENCE = {"c16r25": (0.1662, 0.3222), "c8r50": (0.254, 0.5332), "c32r62": (0.1049, 0.1588)}
-PRESENCE_MIN_S = 1.0
-PRESENCE_PHASES = 4  # symbol timings presence tries, T / 4 apart
-PRESENCE_FRACS = 2  # CFOs within a tone spacing, R / 2 apart
-
-
-def presence(g: Grid, x: np.ndarray, reach_hz: float = 150.0) -> float:
-    """Is a burst on this grid on the air in x (any part of it: no sync or
-    header needed)? -> the best, over symbol timing and CFO, of the mean
-    over x's symbols of the strongest tone's share of the grid's energy,
-    counted only where the strongest tone changed from the symbol before,
-    and then as the lesser of the two symbols' shares. M-FSK data puts
-    most of a symbol in one tone, a different one most symbols ((M-1)/M);
-    noise spreads it (a 1/M-ish share); a tone or a slow FSK narrower than
-    a bin (FT8) holds one bin; a key-down after a key-up changes from a
-    noise symbol (its share counts)."""
+def coarse_rows(g: Grid, x: np.ndarray, extra: int) -> np.ndarray:
+    """detect's coarse energies of x's whole symbols: (n, 4, m + 2 extra),
+    [k, q] symbol k's tones from extra bins below the grid at CFO fraction
+    q / 4, as shares. One rfft per symbol zero-padded to 4T, bins R / 4
+    apart: a tone at f0 + k R is bin 4 (f0 / R + k) (f0 a whole number of
+    bins), so fraction q / 4 is that bin + q, what mixing by it and a
+    T-point FFT would give (|Z|^2 drops the mix's phase)."""
     T = g.T
-    extra = int(np.ceil(reach_hz / g.rate))
-    best = 0.0
-    for ph in range(PRESENCE_PHASES):
-        s = ph * T // PRESENCE_PHASES
-        n = (len(x) - s) // T
-        if n < 2:
-            continue
-        for fr in range(PRESENCE_FRACS):
-            E = _energies(g, x, s, n, fr * g.rate / PRESENCE_FRACS, extra)
-            for k in range(2 * extra + 1):
-                S = _shares(E[:, k:k + g.m])
-                a = S.argmax(axis=1)
-                top = S.max(axis=1)
-                v = float(np.sum(np.where(a[1:] != a[:-1], np.minimum(top[1:], top[:-1]), 0.0)) / (n - 1))
-                best = max(best, v)
-    return best
+    n = len(x) // T
+    if n == 0:
+        return np.zeros((0, 4, g.m + 2 * extra))
+    F = np.fft.rfft(x[:n * T].reshape(n, T), n=4 * T, axis=1)
+    P = F.real ** 2 + F.imag ** 2
+    bins = 4 * (round(g.f0 / g.rate) - extra + np.arange(g.m + 2 * extra))
+    return np.stack([_shares(P[:, bins + q]) for q in range(4)], axis=1)
 
 
-def present(g: Grid, x: np.ndarray) -> bool:
-    """presence's verdict on all of x (at least PRESENCE_MIN_S of it)."""
-    n = len(x) // g.T
-    if n < PRESENCE_MIN_S * g.rate:
-        return False
-    a, b = PRESENCE[g.name]
-    return presence(g, x) >= a + b / np.sqrt(n)
-
-
-class PresenceTrack:
-    """presence over a stream, each symbol read once: per timing (T /
-    PRESENCE_PHASES apart on the stream's own grid, from index 0), CFO
-    fraction and whole-bin shift, every symbol's strongest share and tone
-    are kept, and present() sums the window's. On a window starting at a
-    multiple of T / PRESENCE_PHASES it reads presence(g, the window's audio)."""
+class CoarseTrack:
+    """A streaming receiver's coarse_rows of grid g as audio arrives, on the
+    stream's T/4 timing grid: each hop's searches (find, find_mid) read the
+    rows instead of transforming their windows again (each window holds
+    2-4 hops of audio already transformed). Detection as detect's on x,
+    its placements on the stream's grid instead of the window's."""
 
     def __init__(self, g: Grid, reach_hz: float = 150.0):
         self.g, self.extra = g, int(np.ceil(reach_hz / g.rate))
-        self.reset()
+        self.s: list[int | None] = [None] * 4  # per phase: the stream sample of its first row
+        self.E = [np.zeros((0, 4, g.m + 2 * self.extra)) for _ in range(4)]
 
-    def reset(self):
-        # (phase, frac) -> [stream index of the first kept symbol, tops (shifts, n), tones (shifts, n)]
-        self.rows: dict = {}
-        self.n = 0  # symbols in the window (the threshold's)
+    def feed(self, buf: np.ndarray, off: int):
+        """`buf` holds stream samples off.. (a receiver's buffer): rows for its
+        new whole symbols; rows of samples it no longer holds dropped."""
+        T, end = self.g.T, off + len(buf)
+        for ph in range(4):
+            s, E = self.s[ph], self.E[ph]
+            if s is None or s < off:
+                first = off + (ph * T // 4 - off) % T
+                E = E[(first - s) // T:] if s is not None else E  # the rows still in buf
+                s = first
+            nxt = s + len(E) * T
+            if end - nxt >= T:
+                E = np.concatenate([E, coarse_rows(self.g, buf[nxt - off:], self.extra)])
+            self.s[ph], self.E[ph] = s, E
 
-    def feed(self, x: np.ndarray, off: int, lo: int):
-        """x: the receiver's audio, x[0] at stream index `off`; the window is
-        symbols from stream index lo (>= off) to x's end. Reads the new ones,
-        drops those before lo."""
-        g, T = self.g, self.g.T
-        K = 2 * self.extra + 1
-        end = off + len(x)
-        self.n = max(0, end - lo) // T
-        for ph in range(PRESENCE_PHASES):
-            base = ph * T // PRESENCE_PHASES
-            first = lo + (base - lo) % T  # the window's first symbol on this timing
-            for fr in range(PRESENCE_FRACS):
-                s, tops, tones = self.rows.get((ph, fr), (first, np.zeros((K, 0)), np.zeros((K, 0), int)))
-                if s < first:  # (whole symbols: s and first share the timing)
-                    k = min(tops.shape[1], (first - s) // T)
-                    s, tops, tones = s + k * T, tops[:, k:], tones[:, k:]
-                if not tops.shape[1]:
-                    s = first
-                nxt = s + tops.shape[1] * T
-                nn = (end - nxt) // T
-                if nn > 0:
-                    E = _energies(g, x, nxt - off, nn, fr * g.rate / PRESENCE_FRACS, self.extra)
-                    S = [_shares(E[:, k:k + g.m]) for k in range(K)]
-                    tops = np.concatenate([tops, np.stack([v.max(axis=1) for v in S])], axis=1)
-                    tones = np.concatenate([tones, np.stack([v.argmax(axis=1) for v in S])], axis=1)
-                self.rows[ph, fr] = (s, tops, tones)
-
-    def value(self) -> float:
-        """presence over the window."""
-        best = 0.0
-        for _, tops, tones in self.rows.values():
-            n = tops.shape[1]
-            if n < 2:
+    def rows(self, a: int, b: int) -> list:
+        """detect's per-phase (first symbol's sample from a, rows) of the
+        whole symbols in stream samples [a, b)."""
+        T, out = self.g.T, []
+        for ph in range(4):
+            s, E = self.s[ph], self.E[ph]
+            if s is None:
                 continue
-            t = np.where(tones[:, 1:] != tones[:, :-1], np.minimum(tops[:, 1:], tops[:, :-1]), 0.0)
-            best = max(best, float(np.max(np.sum(t, axis=1) / (n - 1))))
-        return best
-
-    def present(self) -> bool:
-        """present()'s verdict on the window."""
-        if self.n < PRESENCE_MIN_S * self.g.rate:
-            return False
-        a, b = PRESENCE[self.g.name]
-        return self.value() >= a + b / np.sqrt(self.n)
+            k0 = max(0, -((s - a) // T))  # the first row starting at or after a
+            k1 = min(len(E), (b - s) // T)  # rows ending by b
+            out.append((s + k0 * T - a, E[k0:max(k0, k1)]))
+        return out
 
 
 def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_only: bool = False, n_sym: int = 0,
-           floor: float = -1.0, mid: bool = False):
+           floor: float = -1.0, mid: bool = False, track: "CoarseTrack | None" = None, x0: int = 0):
     """-> (score, burst start sample, cfo Hz): the sync pattern's best
     placement. Coarse: symbol energies at T/4 hops and quarter-bin CFO
     steps, as shares, summed over the sync symbols of the shortest burst
@@ -569,7 +522,9 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     and whole-bin shift. Score: the mean share on the pattern (0..1).
     `front_only`: the first block alone (an early lock); `mid`: the mid
     block alone, its first sample for the burst's start (find_mid);
-    `floor`: no fine stage under this score (the search's CPU on noise)."""
+    `floor`: no fine stage under this score (the search's CPU on noise).
+    `track`: its rows for the coarse stage instead (x: stream samples from
+    `x0`, rows on the stream's timing grid)."""
     lay = layout(g.name, n_sym or stream_symbols(g.name, 0, False))
     rows, tones_ = lay.sync_rows, lay.sync_tones
     if front_only:
@@ -581,18 +536,18 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     T = g.T
     extra = int(np.ceil(reach_hz / g.rate))
     best = (-1.0, 0, 0.0)
-    for frac in (0.0, 0.25, 0.5, 0.75):
-        # mixed once per CFO fraction, sliced per timing phase (as
-        # _energies mixes: the ramp is by absolute sample, so a slice of it
-        # is what _energies(x, off, ...) would build; 4x fewer exps)
-        zf = x * np.exp(-2j * np.pi * (g.f0 - extra * g.rate + frac * g.rate) * np.arange(len(x)) / FS)
-        for ph in range(4):
-            off = ph * T // 4
-            n = (len(x) - off) // T
+    # per timing phase: (its first symbol's sample in x, coarse_rows of its symbols)
+    if track is None:
+        C = [(ph * T // 4, coarse_rows(g, x[ph * T // 4:], extra)) for ph in range(4)]
+    else:
+        assert track.extra == extra
+        C = track.rows(x0, x0 + len(x))
+    for q, frac in enumerate((0.0, 0.25, 0.5, 0.75)):
+        for off, E4 in C:
+            n = len(E4)
             if n < span:
                 continue
-            Z = np.fft.fft(zf[off:off + n * T].reshape(n, T), axis=1)
-            E = _shares(np.abs(Z[:, :g.m + 2 * extra]) ** 2)
+            E = E4[:, q]
             # every start and whole-bin shift at once: S[dk, j] = sum over the
             # pattern's rows r of E[r + j, tone_r + extra + dk] (a loop over
             # dk and r took ~1/3 of a listening host's CPU on its tiny arrays)
@@ -615,19 +570,61 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     return score, s0, cfo
 
 
-def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
-    """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
-    sent) up to a per-symbol constant. Noncoherent square-law metric, exact
-    for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
-    codeword's, N0 plus the Doppler spill (spill())."""
+# One N0 for every tone lets a steady carrier in the passband (QRM: a
+# broadcast carrier, a birdie, another mode's idle tone) win its tone in
+# every symbol: the square law reads it as signal, and coh_metric, which
+# looks for a constant phasor, more so. A tone carries signal in ~1/m of a
+# codeword's rows, so its median energy over the rows is its own floor.
+# tone_floors() gives it to tone_metric and coh_metric once it stands
+# FLOOR_SIGMAS standard errors (a median of n exponentials: 1.44 / sqrt(n),
+# relative) over the tones' median floor; with no such tone both are as
+# before. On noise alone a tone passes in under 1 of 1000 calls at 6 (8, 16
+# and 32 tones; 22, 90 and 240 rows: a header read, a control, a data
+# codeword); at 5, up to 6 of 1000.
+FLOOR_SIGMAS = 6.0
+
+
+def tone_floors(E: np.ndarray, n0: float) -> np.ndarray | None:
+    """(n, m) tone energies and the common N0 -> (m,) per-tone noise floors,
+    or None where no tone's median stands out (FLOOR_SIGMAS): N0, times the
+    tone's median over the tones' median where it does."""
+    med = np.median(E, axis=0)
+    ref = np.median(med)
+    out = med > ref * (1 + FLOOR_SIGMAS * 1.44 / np.sqrt(len(E)))
+    if not out.any():
+        return None
+    return np.where(out, n0 * (med / ref), n0)
+
+
+def _tone_gain(E: np.ndarray) -> tuple:
+    """tone_metric's (gain, offset): E * gain - offset. One N0: the square
+    law's Es / (N0 (N0 + Es)) and None; per-tone floors (tone_floors): (m,)
+    gains Es / (N_m (N_m + Es)) and offsets ln(1 + Es / N_m), which are a
+    per-symbol constant only when the floors are equal."""
     top = E.max(axis=1)
     n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
+    nb = tone_floors(E, n0)
+    if nb is not None:
+        Ew = E * (n0 / nb)  # whitened, for Es and the spill: the carrier's tone is not the strongest by itself
+        es = max(np.mean(Ew.max(axis=1)) - n0, 1e-3 * n0)
+        nb = nb + spill(Ew, n0, es) * es
+        return es / (nb + es) / nb, np.log1p(es / nb)
     es = max(np.mean(top) - n0, 1e-3 * n0)
     n0 += spill(E, n0, es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
-    return E * (es / (n0 + es) / n0)
+    return es / (n0 + es) / n0, None
+
+
+def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
+    """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
+    sent) up to a per-symbol constant. Noncoherent square-law metric, exact
+    for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
+    codeword's, N0 plus the Doppler spill (spill()); a tone whose own floor
+    stands out of N0 (tone_floors: a carrier) is scored against that floor."""
+    gain, off = _tone_gain(E)
+    return E * gain if off is None else E * gain - off
 
 
 def spill(E: np.ndarray, n0: float, es: float) -> float:
@@ -747,11 +744,13 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     E0 = _energies(g, x, s0, n, cfo)
     tot = E0.sum()
     # the metric's weight fixed at the lock's placement (each candidate's own: 0.2 dB worse, c8r50 AWGN)
-    w = float(tone_metric(g, E0).sum() / tot) if tot > 0 else 0.0
+    gain, off = _tone_gain(E0) if tot > 0 else (0.0, None)  # per-tone floors: the tones' own gains and offsets
+    w = float((E0 * gain).sum() / tot) if tot > 0 and off is None else 0.0
     T, N = g.T, n * g.T
 
     def ll(z):  # the likelihood of n symbols of mixed samples, as _energies(...) * w would score them
-        G = np.abs(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m]) ** 2 * w
+        G = _sq(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m])
+        G = G * w if off is None else G * gain - off
         return G[kr, known[kr]].sum() + np.logaddexp.reduce(G[ur], axis=1).sum()
     best, bv = (s0, cfo), None
     for st, sf in ((max(1, g.T // 16), g.rate / 16), (max(1, g.T // 64), g.rate / 64)):
@@ -806,14 +805,51 @@ SPREAD_SIG = 2.5  # the fit needs lag 1's correlation over SPREAD_SIG / sqrt(n):
 # variance is so small that the burst's own energy pattern passed SPREAD_SIG
 # (c8r50 +20 dB read 2.6 Hz)
 SPREAD_EXCESS_FIT = 0.05
+# With multipath every tone has its own gain and the data changes tone each
+# symbol, so on slow selective fading the energies look white too: no fit, and
+# the excess variance read SPREAD_MAX_HZ (control-only fsk16r25, 200 seeds:
+# 2 ms / 0.1 Hz 152, 2 ms / 1 Hz 29; flat 1 Hz none). So before that reading,
+# the correlation over the pairs whose winning tones are at most one apart
+# and that are SPREAD_NEAR_S apart in time: over SPREAD_NEAR_Z / sqrt(pairs),
+# the fading is slow and the spread unmeasured. The pairs start 80 ms apart,
+# not at the next symbol: 10 Hz fading is still correlated over a symbol or
+# two (lags 1-3 read 25 of fsk16r25's 188 right readings at 7 ms / 10 Hz as
+# slow, and 30 of fsk8r50's 88), and by 80 ms it is not, where 1 Hz fading
+# holds to 160 ms and past. Of 200, fsk16r25 / fsk8r50, SPREAD_MAX_HZ
+# readings before -> after: 2 ms / 0.1 Hz 152 -> 4 / 105 -> 0; 2 ms / 1 Hz
+# +2 dB 29 -> 8 / 4 -> 0; 7 ms / 1 Hz -8 dB 68 -> 32 / 41 -> 28; and the
+# right ones, 7 ms / 10 Hz 188 -> 180 / 88 -> 88; 2 ms / 10 Hz 182 -> 179 /
+# 65 -> 62; 7 ms / 30 Hz 198 -> 198 / 194 -> 188 (the test's own chance
+# level at SPREAD_NEAR_Z: about 2%). The near pairs against the far ones at
+# the same lags did worse both ways (7 ms / 1 Hz 68 -> 60, 30 Hz 198 -> 182):
+# with multipath the far tones fade apart whatever the rate.
+SPREAD_NEAR_S = (0.08, 0.16)
+SPREAD_NEAR_Z = 2.0
 
 
-def spread(g: Grid, top: np.ndarray, n0: float) -> float:
+def _near_lags(g: Grid) -> range:
+    """SPREAD_NEAR_S in symbols (c16r25: 2-4, c8r50: 4-8, c32r62: 5-10)."""
+    return range(max(1, int(np.ceil(SPREAD_NEAR_S[0] * g.rate - 1e-9))), int(np.floor(SPREAD_NEAR_S[1] * g.rate + 1e-9)) + 1)
+
+
+def _slow_by_near_tones(g: Grid, t: np.ndarray, v: float, tones: np.ndarray) -> bool:
+    num, n = 0.0, 0
+    for lag in _near_lags(g):
+        if lag >= len(t):
+            break
+        ok = np.abs(tones[lag:] - tones[:-lag]) <= 1
+        num += float(np.sum(t[lag:][ok] * t[:-lag][ok]))
+        n += int(ok.sum())
+    return n > 0 and v > 0 and num / n / v * np.sqrt(n) > SPREAD_NEAR_Z
+
+
+def spread(g: Grid, top: np.ndarray, n0: float, tones: np.ndarray | None = None) -> float:
     """Doppler spread (2 sigma, Hz) from per-symbol energies (noise n0 per
     bin): a least-squares fit of log c(k) = a - b k^2 (Gaussian Doppler:
     c(k) = A exp(-(2 pi sigma k T)^2)) over the lags 1.. whose
     autocovariance c(k) holds up; with none, too fast or no fading, by the
-    excess variance."""
+    excess variance, unless the symbols on the same or adjacent tones
+    (`tones`: each symbol's winning tone) say slow: then unmeasured."""
     n = len(top)
     if n < SPREAD_MIN_SYMS:
         return UNMEASURED_SPREAD_HZ
@@ -828,7 +864,9 @@ def spread(g: Grid, top: np.ndarray, n0: float) -> float:
            and c[m] > SPREAD_KEEP * c[0]):
         m += 1
     if m < 2:
-        return SPREAD_MAX_HZ if excess >= SPREAD_EXCESS_MIN else 0.0
+        if excess < SPREAD_EXCESS_MIN:
+            return 0.0
+        return UNMEASURED_SPREAD_HZ if tones is not None and _slow_by_near_tones(g, t, v, tones) else SPREAD_MAX_HZ
     x = np.arange(1, m + 1, dtype=np.float64) ** 2
     y = np.log(c[:m])
     mx, my = np.mean(x), np.mean(y)
@@ -841,15 +879,32 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     OFDM: SNR in the 2500 Hz reference, Doppler spread (spread(), from the
     winning tone's energy over time), and `snr`, per symbol, from the
     winning tone's energy over the noise bins (phy.measure makes the
-    effective-MI features of it). Native cpm::measure."""
+    effective-MI features of it). With a carrier (tone_floors), snr_est
+    reads the tones scaled down to the quietest quarter's floor, Es back up
+    by the share kept: fsk16r25 -8 dB reads +0.1 dB at a carrier 12 dB in
+    50 Hz, -0.5 at 18, -3 at 24, where the carrier read as signal read
+    +2.3, +5.8, +8. Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
 
-    top = E.max(axis=1)
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
+    top = E.max(axis=1)
     snr = np.maximum(top / n0 - 1, 1e-6)
-    es = max(float(np.mean(top) - n0), 1e-12)
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
-                headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
+    es_n0 = max(float(np.mean(top) - n0), 1e-12) / n0
+    if tone_floors(E, n0) is not None:
+        # a carrier: for snr_est only, its tone and the ones it leaks into (under
+        # tone_floors' bar, but they raise the tones' median) each scaled to the
+        # quietest quarter's floor; the signal, ~1/m of every tone's rows, keeps
+        # `kept` of its energy, so Es is scaled back up by that. The per-symbol
+        # snr and the spread stay as read: scaled rows looked like fading and the
+        # gear shifter left c32r62 (-37%, awgn -12, carrier 12 dB)
+        med = np.median(E, axis=0)
+        q = np.quantile(med, 0.25)
+        r = q / np.maximum(med, q)
+        Ew = E * r
+        n0w = max(np.median(np.sort(Ew, axis=1)[:, :-1]) / np.log(2), 1e-300)
+        es_n0 = max(float(np.mean(Ew.max(axis=1)) - n0w) / float(np.mean(r)), 1e-12) / n0w
+    return dict(snr_est=10 * np.log10(es_n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0, E.argmax(axis=1)),
+                delay_est_ms=0.0, headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 
 def _peak_ratio(g: Grid, x: np.ndarray, s0: int, cfo: float, mid: bool = False) -> float:
@@ -864,7 +919,7 @@ def _peak_ratio(g: Grid, x: np.ndarray, s0: int, cfo: float, mid: bool = False) 
 
 
 def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float = 150.0, front_only: bool = True,
-         lo: int = 0, hi: int | None = None, wait: bool = False):
+         lo: int = 0, hi: int | None = None, wait: bool = False, track: CoarseTrack | None = None, x0: int = 0):
     """-> early lock {spec, n_data, dup, start, end, score, header score} of
     a burst of grid g in x, or None: the sync pattern (front block alone by
     default) scoring over `threshold` (default SYNC_THRESHOLD; given: no
@@ -875,19 +930,21 @@ def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float
     reach} for late_lock instead of None.
     `end`: one past its last sample, in x's samples (it may run past x).
     `lo`, `hi`: only starts in [lo, hi) are searched (a streaming receiver
-    searches each start once: detect's cost is the audio it is given)."""
+    searches each start once: detect's cost is the audio it is given).
+    `track`, `x0`: detect's (x the stream from sample x0)."""
     floor = SYNC_THRESHOLD[g.name] if threshold is None else threshold
     if lo or hi is not None:
         lay0 = layout(g.name, stream_symbols(g.name, 0, False))
         span = ((lay0.sync_rows[lay0.front - 1] if front_only else lay0.sync_rows[-1]) + 2) * g.T
         a = max(0, lo - g.T)
         b = len(x) if hi is None else min(len(x), hi + span + g.T)
-        score, s0, cfo = detect(g, x[a:b], reach_hz=reach_hz, front_only=front_only, floor=floor)
+        score, s0, cfo = detect(g, x[a:b], reach_hz=reach_hz, front_only=front_only, floor=floor, track=track,
+                                x0=x0 + a)
         s0 += a
         if not lo <= s0 < (len(x) if hi is None else hi):
             return None
     else:
-        score, s0, cfo = detect(g, x, reach_hz=reach_hz, front_only=front_only, floor=floor)
+        score, s0, cfo = detect(g, x, reach_hz=reach_hz, front_only=front_only, floor=floor, track=track, x0=x0)
     if score < (SYNC_THRESHOLD[g.name] if threshold is None else threshold):
         return None
     if s0 + hdr_span(g.name, 1) > len(x):
@@ -918,16 +975,17 @@ def late_lock(g: Grid, x: np.ndarray, cand: dict):
     return _lock(g, cand["start"], cand["cfo"], cand["score"], h, HDR_COPIES)
 
 
-def find_mid(g: Grid, x: np.ndarray, lo: int = 0, hi: int | None = None):
+def find_mid(g: Grid, x: np.ndarray, lo: int = 0, hi: int | None = None, track: CoarseTrack | None = None,
+             x0: int = 0):
     """-> find's lock of a burst whose front was missed, from its mid block
     (the sync block before header copy 2) and both header copies, or None.
     Block 1's start in [lo, hi); each word puts it at its own row (a short
     burst's after its data), so each is read at the start it implies, and
-    a start before x is no reading."""
+    a start before x is no reading. `track`, `x0`: detect's."""
     T, nb = g.T, len(mid_block(g))
     a = max(0, lo - T)
     b = len(x) if hi is None else min(len(x), hi + (nb + 1) * T)
-    score, p, cfo = detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name])
+    score, p, cfo = detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name], track=track, x0=x0 + a)
     p += a
     if score < MID_THRESHOLD[g.name] or not lo <= p < (len(x) if hi is None else hi):
         return None
@@ -1157,15 +1215,23 @@ def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
     d = np.diff(t)
     p = a[1:] * np.conj(a[:-1]) * c[1:] * c[:-1]  # ~ exp(i (nu - 2 pi d delta))
     grid = np.linspace(-0.5, 0.5, 401)
-    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, d)) @ p))]
+    dv, inv = np.unique(d, return_inverse=True)  # the pairs summed per tone step first: the phase depends on d alone
+    q = np.zeros(len(dv), complex)
+    np.add.at(q, inv, p)
+    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, dv)) @ q))]
     nu = np.angle(np.sum(p * np.exp(2j * np.pi * delta * d)))
     Z = Z * np.exp(2j * np.pi * delta * np.arange(m))[None] * np.exp(-1j * nu * r)[:, None]
     a = (P * Z).sum(axis=1)
     k = np.ones(2 * W + 1)
     k[W] = 0.0
     h = np.convolve(a, k, "same") / np.maximum(np.convolve(np.ones(n), k, "same"), 1)
-    v = max(float(np.mean((P * np.abs(Z - h[:, None]) ** 2).sum(axis=1))), n0 * (1 + 1e-3))
-    return np.abs(Z) ** 2 / n0 - np.abs(Z - h[:, None]) ** 2 / v
+    res = _sq(Z - h[:, None])
+    nb = tone_floors(_sq(Z), n0)
+    if nb is not None:  # per-tone floors: Z_k = h_i + CN(0, N_k + s2) on the sent tone, CN(0, N_k) elsewhere
+        s2 = max(float(np.mean((P * (res - nb[None])).sum(axis=1))), n0 * 1e-3)
+        return _sq(Z) / nb - res / (nb + s2) - np.log1p(s2 / nb)
+    v = max(float(np.mean((P * res).sum(axis=1))), n0 * (1 + 1e-3))
+    return _sq(Z) / n0 - res / v
 
 
 def _n0(E: np.ndarray) -> float:
@@ -1190,7 +1256,7 @@ def coh_read_header(g: Grid, x: np.ndarray, s0: int, cfo: float, copies: int = H
     words, rows = valid_words(g.name), header_rows(g.name, copies)
     n = max(r[-1] for r in rows) + 1
     Z = bins(g, x, s0, n, cfo)
-    n0 = _n0(np.abs(Z) ** 2)
+    n0 = _n0(_sq(Z))
     f, mb, H = preamble_pattern(g), mid_block(g), hdr_len(g)
     F = len(f)
     scores, front = [], 0.0
@@ -1247,7 +1313,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
     rows = slot_rows(g, n_data, dup)
     a, b = max(0, rows[slot][0] - COH_W), min(lay.n, rows[slot][-1] + 1 + COH_W)
     Z = r["Z"][a:b]
-    E = np.abs(Z) ** 2
+    E = _sq(Z)
     G = tone_metric(g, E)
     P = np.exp(G - G.max(axis=1, keepdims=True))
     P /= P.sum(axis=1, keepdims=True)

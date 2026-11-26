@@ -618,7 +618,7 @@ without). So the last codeword of a write rides in the control's padding when it
 - **Idle:** the caller keeps the link alive with a poll a random 15-30 s after the
   last exchange.
   - The callee breaks idle itself when its host writes: a wake burst, built like any
-    other (data, its ACK), once t_turn + 2.5 s + 1 s plus a random 0-1 s has passed
+    other (data, its ACK), once the caller's t_turn + 2.5 s + 1 s plus a random 0-1 s has passed
     in silence since its last burst. By then the caller's answer or timeout retry
     would have started. A header heard meanwhile holds the wake past that burst.
   - Only from idle: the callee's last burst carried no data, so the caller's receive
@@ -654,11 +654,15 @@ without). So the last codeword of a write rides in the control's padding when it
   - v1 (until 2026-10) let only the caller start turns, polling 2 s after the last
     exchange and doubling to 16 s (2-4 s with chat on): up to 16 s of callee latency,
     and constant keying.
-- **Waiting for a reply:** t_turn + 1 s for the reply to start, detected as a decoded
+- **Turnaround (t_turn):** each station's own, from the end of the burst it hears to
+  its reply keyed (decode, DD, PTT), advertised in its CONNECT or CONNECT_ACK. Its
+  decode keeps to it (DD stops at that deadline); the other side's reply timers allow
+  it. Before the handshake completes, a station assumes its own.
+- **Waiting for a reply:** the peer's t_turn + 1 s for the reply to start, detected as a decoded
   burst header. The header gives submode and codeword count, so the wait then extends
   to the reply's known end. The master doesn't sit through a worst-case reply length
   before retrying.
-- **DISC reply timer:** DISC_ACK uses the received DISC's mode and control-codeword count, so the disconnecting station adds that reply airtime to its reply-start window. This keeps a retry from starting over an ACK whose header was missed, including a slow FSK ACK. A heard ACK still closes the session immediately; a missing ACK takes longer to retry, with the same three-attempt limit.
+- **DISC reply timer:** DISC_ACK uses the received DISC's mode and control-codeword count, so before a retry the disconnecting station adds that reply airtime to its reply-start window. This keeps a retry from starting over an ACK whose header was missed, including a slow FSK ACK. After the last try it does not wait: a missed header leaves nothing to decode. A retry goes only if its own reply window ends within `DISC_BUDGET_S` (29 s) of the first try, since BPQ32 sends ABORT 30 s after an unanswered DISCONNECT; otherwise the session closes `unconfirmed` at once. At t_turn 1 s, the default ladder (the cap's connect mode, then ROBUST_CONNECT) keeps its three tries (28.7 s unanswered); a DISC whose every try is in ROBUST_CONNECT gets two. A heard ACK still closes the session immediately.
 - **Link lost:** 90 s after the last decodable burst from the peer, on either side:
   60 s of retries past the keepalive's longest gap (30 s).
   The link core's consecutive-timeout count (12) applies only in the lockstep tests,
@@ -684,8 +688,23 @@ characters plus SSID, space padded at the end (a space inside a name is kept).
 | CONNECT_NAK | nonce echo, reason: 1 version, 2 not listening, 3 busy (a session or a call of its own under way), 4 refused by the host (ACCEPT couldn't connect) |
 | DISC / DISC_ACK | graceful close; DISC is retried 3 times |
 
-CONNECT retries: 5 tries, 3-5 s apart with jitter, then fail to the host.
+CONNECT retries: 6 tries, 3-5 s apart with jitter, then fail to the host.
 A CONNECT_NAK ends them at once: the caller closes with `refused: <reason>`.
+
+A session whose connect frame came in the retries' mode was not answered in the cap's
+connect mode. If the path is why, it starts at the top of the escalation floor (§6):
+control-only bursts go in the robust mode from the first turn, the caller's first burst
+is one of them, and the floor decays as any does. The caller decides, from its reading
+of the CONNECT_ACK (`policy.weak_path`): `snr_est` under −6 dB or `spread_est` at least
+6 Hz. A first CONNECT lost to QRM, or to a callee that was scanning, leaves a good
+reading, and the session starts at the bottom like one made by the first try. The callee
+does not decide: it takes the floor when the caller's first burst arrives in a robust
+mode. Nothing on the wire says so (`Session._robust_start`).
+
+A caller that starts there has one reading of the path, the CONNECT_ACK's. Until a data
+burst of the callee's is usable, the data mode it asks for stays within 2 dB of that
+reading (`ROBUST_START_DATA_MARGIN_DB` over the mode's steady-channel threshold; none
+that robust: the most robust there is), and it asks for the burst's control twice.
 
 A CONNECT addressed to a station is decoded in every state, so it is always
 answered: CONNECT_ACK while listening, CONNECT_NAK otherwise. The NAK is not the
@@ -841,6 +860,25 @@ data2g/arq/engine.py). Off by default.
 
 As built (data2g/arq/policy.py):
 
+- **Post-decode data-aided MER (`phy.data_mer`, issue #290):** repeating low-PAPR
+  pilots absorb transmitter audio-path distortion into the channel estimate `h`,
+  while higher-PAPR data symbols take it as noise. After decoding an OFDM burst,
+  `ModemRx.measure_data` measures the data-cell residual variance `|y - h*x|^2`
+  using exact re-encoded symbols for decoded slots and a strided top-K
+  Gaussian-mixture EM (at most `MER_MAX_EM_CELLS = 1024` cells, `MER_EM_TOP_K = 12`
+  nearest points, `MER_EM_ITERS = 6`) for undecoded slots. It attaches `mer_db`
+  (2500 Hz reference bandwidth) and, when the data-cell variance exceeds the
+  pilot-predicted baseline (`n0_k + mse + clip_ratio * |h|^2`, with `clip_ratio = 0`
+  on FM `f108` ≥ 16-QAM, which transmits unclipped) past `MER_DEADBAND_RATIO = 1.35`
+  (or `1 + 3 / sqrt(N)` on short bursts), adds the excess `delta * |h|^2` into the
+  shifter's `snr_est` and `mi_*` (via `GearShifter.update_measured`). Raw pilot
+  `snr_est` for `SN`, `REF`, `BCAST HEARD`, `_energy` flooring and recordings is
+  unchanged. On FM (`predictor.fm_outcome`), same-band candidates also cap their
+  effective SNR by their constellation's MIESM equivalent SNR from `mi_*` plus
+  `FM_MER_OFFSET_DB` (2.0 dB, matching the 15 kHz IF filter's offset in
+  `mode_thresholds.json`), catching frequency-selective rolloff alongside
+  nonlinear distortion. `DATA2G_DATA_MER=0` disables it (Python and native) for
+  paired studies.
 - The predictor sees the peer's last two bursts, not one. One burst can't tell a steady
   channel from 0.1 Hz fading. Two can: average them, or read the change between them.
 - Online correction: after each peer burst, the receiver compares what decoded with the
@@ -1011,6 +1049,10 @@ off (Python and native) for A/B runs.
       `HAND END`; an armed listen whose burst never went out gives up after
       30 s with `HAND END EXPIRED`. Send the command before queuing the frame that
       anchors the window: the KISS port may send it at once.
+    - **On FM a channel is a time slot**, 1.5 s apart, not a frequency:
+      stations that key together on FM are captured, not added. The commands
+      are the same; HAND SEND keys in its channel's slot and the windows run
+      to the last listed channel's end (docs/hand-burst.md, "FM").
     - **HAND OVERHEAR ref d channel [channel...]** (issue #210): a
       bystander's window, for a station that sat out a roll call or couldn't
       copy it. It opens d seconds after heard burst `ref` ends (LOST refs
@@ -1039,10 +1081,13 @@ off (Python and native) for A/B runs.
     Only bursts that decode under the session's key count. WRONG before the
     first one, and again once a new session starts. No OK follows.
   - **RETRIES** answers `RETRIES n`: the CONNECT retries after the first try
-    (default 4, session.CONNECT_TRIES - 1). `RETRIES n` sets them, digits
+    (default 5, session.CONNECT_TRIES - 1). `RETRIES n` sets them, digits
     only, 0-20: OK, else WRONG. They apply to this command client's later
     CONNECTs, not one under way, and go back to the default when it leaves.
-    Retries after the first go in ROBUST_CONNECT (fsk16r25-r1/2), ~13 s apart.
+    The first four retries go in ROBUST_CONNECT (fsk16r25-r1/2), ~13 s apart,
+    and any after them in ROBUST_FAST (fsk8r50-r1/3), for fast fading:
+    nothing is measured before a session. With fewer retries the last goes in
+    ROBUST_FAST, unless it is the only one (RETRIES 1: ROBUST_CONNECT).
   - **DATA2G ON / OFF** marks a client that knows Data2G. Off again when the
     command client leaves. With it on:
     - BUFFER is the plain VARA count (no next-burst credit).
@@ -1106,7 +1151,7 @@ off (Python and native) for A/B runs.
   next-burst credit for VARA clients), PTT ON/OFF, BUSY ON/OFF, PENDING /
   CANCELPENDING, and a Data2G-specific `MODE name`.
 - **PENDING:** while listening, a header that may be a CONNECT (one codeword
-  in a connect mode, `--pending`: `fsk` ROBUST_CONNECT only, the default;
+  in a connect mode, `--pending`: `fsk` ROBUST_CONNECT and ROBUST_FAST, the default;
   `ofdm` the caps' first-try modes; `all`; `off`) raises PENDING before the
   body is read. CONNECTED follows if the burst connects. Otherwise
   CANCELPENDING follows once it is read, or 3 s past its end. The header has

@@ -76,6 +76,31 @@ def test_marked_spans_and_gaps_are_not_noise():
     assert s["noise_blocks"] == 200 - 40 + 150 - 6  # 0-20 s less the burst; 22-37 s (COMMIT_S) less recovery
 
 
+def muted(seed=7):
+    """60 s of noise, muted 15.03-45.07 s (60 dB down, as another program
+    sharing the radio does while it transmits) and zeroed 50.0-50.3 s."""
+    x = np.random.default_rng(seed).normal(0, 0.1, 60 * FS)
+    x[round(15.03 * FS):round(45.07 * FS)] *= 1e-3
+    x[50 * FS:round(50.3 * FS)] = 0.0
+    return x
+
+
+def test_mutes_are_not_noise():
+    """The muted blocks and MUTE_PAD_S either side are left out: the floor,
+    tail and impulse count are the noise's alone. (Kept, the mute set the
+    floor, and the edge blocks' few noise pieces read as impulses over the
+    mute's.)"""
+    p, ref = NoiseProfile(), NoiseProfile()
+    x = muted()
+    feed(p, x)
+    feed(ref, x[:15 * FS])
+    s, r = p.snapshot(), ref.snapshot()
+    # 0-57 s (COMMIT_S) less 14.1-46.0 s (blocks 15.1-45.0 s are under 20 dB, the edges' are not) and 49.0-51.3 s
+    assert s["noise_blocks"] == 570 - 319 - 23
+    np.testing.assert_allclose(s["noise_db"], r["noise_db"], atol=0.3)
+    assert max(s["noise_tail_db"]) < 2 and s["impulses_per_min"] < 1
+
+
 def test_too_little_audio_is_none():
     p = NoiseProfile()
     feed(p, np.zeros(4 * FS))
@@ -91,6 +116,7 @@ def test_native_matches(native, native_side):
     t = np.arange(n) / FS
     x = rng.normal(0, 0.1, n) * (1 + 0.5 * (t > 15)) + ((t % 4) < 1) * 0.2 * np.sin(2 * np.pi * 600 * t)
     x[rng.integers(0, n, 200)] += 3.0  # impulses
+    x[round(8.05 * FS):round(11.0 * FS)] *= 1e-3  # a mute
     outs, ps = [], []
     for cls in (NoiseProfile, native.receiver.NoiseProfile):
         p = cls()
@@ -128,3 +154,49 @@ def test_recordings_carry_it(tmp_path):
     assert rx and all("noise" in e for e in rx)
     got = [e["noise"] for e in rx if e["noise"]]
     assert all(len(g["noise_db"]) == len(g["noise_tail_db"]) == len(NoiseProfile.BANDS_HZ) for g in got)
+
+
+def agc_stream(agc: bool):
+    """40 s of white noise with a 5 s burst (1300-1750 Hz noise, 15 dB over
+    the floor in SNR_REF_BW_HZ) from 30 s, through a receiver AGC or not."""
+    from data2g import agc as AGC
+
+    rng = np.random.default_rng(7)
+    n, sigma = 40 * FS, 0.1
+    x = rng.normal(0, sigma, n)
+    b = np.fft.rfft(rng.normal(size=5 * FS))
+    f = np.fft.rfftfreq(5 * FS, 1 / FS)
+    b[(f < 1300) | (f >= 1750)] = 0
+    s = np.fft.irfft(b, 5 * FS)
+    s *= np.sqrt(sigma ** 2 * 2500 / (FS / 2) * 10 ** 1.5 / np.mean(s ** 2))
+    x[30 * FS:35 * FS] += s
+    return AGC.apply(AGC.Spec(0.0, 30.0, 0.005, 0.5) if agc else None, x, sigma ** 2)
+
+
+def test_span_snr_gauges_agc():
+    """Receiver AGC drops the gain under a strong burst (issue #257): the
+    out-of-band gauge reads the burst's SNR as without it; the floor alone
+    reads it ~10 dB low."""
+    got = {}
+    for agc in (False, True):
+        p = NoiseProfile()
+        p.mark(30.0, 35.0)
+        feed(p, agc_stream(agc))
+        got[agc] = p.span_snr_db(p.span_spectra(30.0, 35.0), 1300, 1750)
+        if agc:
+            p.GAUGE_HZ = (0.0, 0.0)
+            got["ungauged"] = p.span_snr_db(p.span_spectra(30.0, 35.0), 1300, 1750)
+    assert abs(got[True] - got[False]) < 1.0, got
+    assert got["ungauged"] < got[False] - 8, got
+
+
+def test_span_snr_native_matches(native):
+    """The C++ span_snr_db (the AGC gauge with it) on the same audio and marks."""
+    for agc in (False, True):
+        ps = [NoiseProfile(), native.receiver.NoiseProfile()]
+        for p in ps:
+            p.mark(30.0, 35.0)
+            feed(p, agc_stream(agc))
+        for start, end, lo, hi in ((30.0, 35.0, 1300, 1750), (30.0, 35.0, 325, 2725), (10.0, 14.0, 950, 2100)):
+            py = ps[0].span_snr_db(ps[0].span_spectra(start, end), lo, hi)
+            assert ps[1].span_snr_db(start, end, lo, hi) == pytest.approx(py, rel=1e-9, abs=1e-9)

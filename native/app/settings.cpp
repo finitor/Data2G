@@ -1,5 +1,6 @@
 #include "app/settings.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,6 +12,7 @@
 
 #include <utility>
 
+#include "generated/config.hpp"
 #include "rig/config.hpp"
 
 namespace data2g::app {
@@ -42,10 +44,24 @@ const RigString RIG_STRINGS[] = {
 // Keys older versions saved: read once, dropped on save.
 const char* const OLD_KEYS[] = {"host", "kiss_address", "rigctld_host", "rigctld_port"};
 
+// One settings file per profile: an HF and an FM station are different radios.
+QString config_name() {
+    return config::PROFILE == "hf" ? QStringLiteral("data2g.conf")
+                                   : QStringLiteral("data2g-%1.conf").arg(QString::fromUtf8(config::PROFILE.data(), config::PROFILE.size()));
+}
+
 QString default_config() {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/Data2G/data2g.conf");
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/Data2G/") + config_name();
 }
 QString g_config;  // open_config's choice
+
+// One program started several times by a client that passes no flags, each
+// copy in its own folder with its own settings (#274). Empty: no such file.
+QString beside_program() {
+    if (!QCoreApplication::instance()) return {};
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/") + config_name();
+    return QFile::exists(path) ? path : QString();
+}
 
 // The old store (QSettings' native one for Data2G/data2g-gui) to `to`: on
 // Linux an ini file of the same format, renamed; elsewhere (the Windows
@@ -69,9 +85,10 @@ std::unique_ptr<QSettings> open_config(int argc, char** argv) {
         if (arg == "--config" && i + 1 < argc) path = QString::fromLocal8Bit(argv[++i]);
         else if (arg.starts_with("--config=")) path = QString::fromLocal8Bit(argv[i] + 9);
     }
+    if (path.isEmpty()) path = beside_program();
     if (path.isEmpty()) {
         path = default_config();
-        if (!QFile::exists(path)) migrate_old(path);
+        if (!QFile::exists(path) && config::PROFILE == "hf") migrate_old(path);  // the old store was HF's
     }
     g_config = path;
     return settings_store();
@@ -112,6 +129,7 @@ QVariantMap settings_map(const Args& a) {
     m["noise_rule"] = a.noise_rule;
     m["decoder_effort"] = a.decoder_effort;
     m["cw_id"] = qs(a.cw_id);
+    m["tx_path"] = qs(a.tx_path);
     m["cw_wpm"] = a.cw_wpm;
     m["nods"] = a.nods;
     return m;
@@ -156,6 +174,7 @@ Args from_settings(const QVariantMap& m, Args a) {
     a.noise_rule = m.value("noise_rule", a.noise_rule).toDouble();
     a.decoder_effort = m.value("decoder_effort", a.decoder_effort).toInt();
     a.cw_id = str("cw_id", a.cw_id);
+    a.tx_path = str("tx_path", a.tx_path);
     a.cw_wpm = m.value("cw_wpm", a.cw_wpm).toDouble();
     a.nods = m.value("nods", a.nods).toBool();
     return a;
@@ -169,7 +188,7 @@ Args load_settings(QSettings& s, Args base) {
 
 const QStringList LIVE_SETTINGS = {"mycall",          "output_volume",  "ptt_on_delay_ms", "ptt_off_delay_ms", "live_constellation",
                                    "noise_rule",      "decoder_effort", "cw_id",           "cw_wpm",           "record",
-                                   "record_dir",      "nods"};
+                                   "record_dir",      "nods",           "tx_path"};
 
 bool needs_restart(const Args& from, const Args& to) {
     QVariantMap live = settings_map(from);

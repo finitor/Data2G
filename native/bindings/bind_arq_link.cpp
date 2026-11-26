@@ -71,7 +71,15 @@ public:
     double airtime(const std::string& m, int n_cw, bool dup) override {
         return (dup ? obj.attr("airtime")(m, n_cw, true) : obj.attr("airtime")(m, n_cw)).cast<double>();
     }
-    std::string connect_mode(int cap, int tries) override { return obj.attr("connect_mode")(cap, tries).cast<std::string>(); }
+    // last only when set: a Python policy written before it takes (cap, tries)
+    std::string connect_mode(int cap, int tries, bool last) override {
+        return (last ? obj.attr("connect_mode")(cap, tries, true) : obj.attr("connect_mode")(cap, tries)).cast<std::string>();
+    }
+    bool weak_path() override { return overrides("weak_path") && obj.attr("weak_path")().cast<bool>(); }
+    void robust_started() override {
+        if (overrides("robust_started")) obj.attr("robust_started")();
+    }
+    bool robust(const std::string& m) override { return overrides("robust") && obj.attr("robust")(m).cast<bool>(); }
     std::optional<double> reply_hold(Station& st, const TxBurst& burst) override {
         if (!overrides("reply_hold")) return std::nullopt;
         return obj.attr("reply_hold")(py::cast(&st, py::return_value_policy::reference),
@@ -79,6 +87,14 @@ public:
     }
     void observe(const Measured& m, const std::string& submode, double now) override {
         obj.attr("observe")(to_dict(m), submode, now);
+    }
+    std::optional<Measured> last_measured() const override {
+        auto m = py::getattr(obj, "measured", py::none());
+        if (m.is_none() || !py::isinstance<py::dict>(m) || !m.contains("snr_est")) return std::nullopt;
+        return measured(m.cast<py::dict>());
+    }
+    void update_measured(const Measured& m) override {
+        if (overrides("update_measured")) obj.attr("update_measured")(to_dict(m));
     }
     // the engine's energy readings and the reply it waits for (carrier hold, missed energy): without these a
     // C++ Engine driving a Python policy (tools/with_native.py) never fed the shifter's energy inputs
@@ -140,6 +156,12 @@ public:
     int n_ctl_slots() const override { return py::getattr(obj, "n_ctl_slots", py::int_(0)).cast<int>(); }
     // link.py asks getattr(rx, "nod", False)
     bool is_nod() const override { return py::getattr(obj, "nod", py::bool_(false)).cast<bool>(); }
+    std::optional<Measured> measure_data(const Measured& m) override {
+        if (!py::hasattr(obj, "measure_data")) return std::nullopt;
+        auto r = obj.attr("measure_data")(to_dict(m));
+        if (r.is_none()) return std::nullopt;
+        return measured(r.cast<py::dict>());
+    }
 };
 
 class PyRng : public Rng {
@@ -189,6 +211,7 @@ SessionTuning py_tuning() {
     t.connect_tries = i("CONNECT_TRIES");
     t.disc_tries = i("DISC_TRIES");
     t.reply_start_s = d("REPLY_START_S");
+    t.disc_budget_s = d("DISC_BUDGET_S");
     t.idle_close_s = d("IDLE_CLOSE_S");
     std::tie(t.keepalive_lo_s, t.keepalive_hi_s) = pair("KEEPALIVE_S");
     std::tie(t.chat_keepalive_lo_s, t.chat_keepalive_hi_s) = pair("CHAT_KEEPALIVE_S");
@@ -541,6 +564,8 @@ void bind_arq_link(py::module_& m) {
         .def_readonly("peer_reply_lost", &Station::peer_reply_lost)
         .def_readonly("peer_abandon", &Station::peer_abandon)
         .def_readwrite("peer_reply_recommend", &Station::peer_reply_recommend)
+        .def_readwrite("now", &Station::now)
+        .def_readonly("tx_end", &Station::tx_end)
         .def_property_readonly("tx", [](Station& s) { return &s.tx; }, py::return_value_policy::reference_internal)
         .def_property_readonly("rx", [](Station& s) { return &s.rx; }, py::return_value_policy::reference_internal)
         .def_property_readonly("stats", [](const Station& s) { return counter(s.stats); })
@@ -626,6 +651,8 @@ void bind_arq_link(py::module_& m) {
         .def_readwrite("call", &Session::call)
         .def_property_readonly("policy", [](const Session& s) { return policy_py(s.policy); })
         .def_readwrite("t_turn", &Session::t_turn)
+        .def_readwrite("peer_t_turn", &Session::peer_t_turn)
+        .def("peer_turn", &Session::peer_turn)
         .def_property_readonly("rng", [](const Session& s) -> py::object {
             auto* r = dynamic_cast<PyRng*>(s.rng.get());
             return r ? r->obj : py::none();

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "arq/link.hpp"
+#include "generated/config.hpp"
 #include "arq/modes.hpp"
 #include "arq/predictor.hpp"
 #include "arq/session.hpp"  // LINK_LOST_S
@@ -45,18 +46,28 @@ inline constexpr std::size_t CPM_FLOOR_HIST = 3;
 inline constexpr double CPM_FLOOR_SNR_DB = -4.0;
 inline constexpr double CPM_FLOOR_SPREAD_HZ = 1.0;
 inline constexpr double FLOOR_CPM_SPREAD_HZ = 3.0;  // policy.py: a CPM burst in the floor's spread condition
-inline constexpr double UNMEASURED_SPREAD_HZ = 2.0;  // equalizer::DEFAULT_SPREAD_HZ (policy.py)
+inline constexpr double UNMEASURED_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // what the equalizer reports unmeasured (policy.py)
 // per mode, its 10% codeword failure SNR on awgn, mpg, mpp, mpd; throws for an unknown mode
 const std::array<double, 4>& mode_thresholds(std::string_view submode);
 inline constexpr int CTL_BYTES = 12;
-inline constexpr std::string_view ALT_POLL = "n4-ack-8f";  // escalation 2's mode
+// FM has no n4 and no CPM (plan Q2): its 500 Hz rungs stand in (policy.py)
+inline constexpr std::string_view ALT_POLL = config::PROFILE == "fm" ? "n10-ack-4f" : "n4-ack-8f";  // escalation 2's mode
 inline constexpr int ROBUST_ESCALATION = 4;  // from here on ROBUST_CONNECT
-inline constexpr std::string_view ROBUST_CONNECT = "fsk16r25-r1/2";
-inline constexpr std::string_view ROBUST_FAST = "fsk8r50-r1/3";  // policy.py: in a session on fast fading
+inline constexpr std::string_view ROBUST_CONNECT = config::PROFILE == "fm" ? "n10-qpsk-r1/5" : "fsk16r25-r1/2";
+// policy.py: in a session on fast fading; FM has no CPM modes, so its robust mode stays ROBUST_CONNECT
+inline constexpr std::string_view ROBUST_FAST = config::PROFILE == "fm" ? ROBUST_CONNECT : "fsk8r50-r1/3";
+inline constexpr int ROBUST_CONNECT_TRIES = 4;  // connect retries in ROBUST_CONNECT; the ones past them in ROBUST_FAST
 inline constexpr double ROBUST_FAST_SPREAD_HZ = 6.0;
+// policy.py: a session connected by a robust retry starts at the robust floor only if the caller's
+// CONNECT_ACK read under this SNR or at least this spread (GearShifter::weak_path)
+inline constexpr double ROBUST_START_SNR_DB = -6.0;
+inline constexpr double ROBUST_START_SPREAD_HZ = 6.0;
+// policy.py: such a session's caller asks for its first data only in modes whose steady-channel threshold
+// is at most the measured snr_est plus this, and for its control twice (GearShifter::start_bound)
+inline constexpr double ROBUST_START_DATA_MARGIN_DB = 2.0;
 
 std::string_view fallback(int cap);
-std::string_view connect_mode(int cap, int tries = 0);
+std::string_view connect_mode(int cap, int tries = 0, bool last = false);
 int ctl_slots(const Mode& m);
 int slots_for(const Mode& m, double seconds, bool data = true, bool dup = false);
 
@@ -74,6 +85,7 @@ struct StationView {
     int misses = 0;
     int esc_floor = 0;
     bool last_rx_data = true;  // the peer's last burst carried data (expected_reply)
+    std::optional<double> tx_end;  // when my burst being built should end (Station::tx_end; nullopt: gap_s)
 };
 
 struct GearRecommendation {  // link.hpp has Recommendation (the Policy's)
@@ -95,7 +107,7 @@ public:
     using Map = std::map<std::string, double, std::less<>>;
 
     std::optional<double> noise_rule = NOISE_RULE;  // nullopt: off (DATA2G_NOISE_RULE=off)
-    double gap_s = 2.5;
+    double gap_s = 2.5;  // the gap input without a clock (StationView::tx_end nullopt: KISS, tests)
     bool use_cpm = true;
     double min_success = 0.0;
     std::optional<Measured> measured;  // the peer's last burst
@@ -111,12 +123,16 @@ public:
     bool want_dup = false;
     std::map<std::string, std::pair<double, double>, std::less<>> predicted;
     bool peer_had_data = true;
+    // started at the robust floor and no data burst of the peer's usable yet (policy.py start_bound)
+    bool start_bound = false;
     std::vector<LogEntry> log;
     std::vector<double> spreads;  // the peer's last bursts' spread_est (tables::OUTCOME_GATE_HIST)
+    std::vector<double> n0_spreads;  // the peer's last bursts' n0_spread_db (FM's regime input)
     std::vector<double> floor_spreads;  // as spreads, a CPM burst's FLOOR_CPM_SPREAD_HZ (cpm_floor; CPM_FLOOR_HIST)
     // the peer's last measured (not defaulted) spread_est: a defaulted reading
     // takes it instead (policy.py SPREAD_CARRY)
     std::optional<double> last_spread;
+    std::optional<double> heard_spread;  // the last burst's own spread_est; nullopt: unmeasured (weak_path)
     std::vector<double> energies;  // the peer's last ENERGY_HIST bursts' energy SNR, dB (policy.py)
     std::vector<double> snrs;  // the peer's last CPM_FLOOR_HIST bursts' snr_est (the CPM floor)
     bool cpm_floor_on = true;  // DATA2G_CPM_FLOOR='' (Python, studies) turns it off
@@ -124,14 +140,24 @@ public:
     std::pair<std::string_view, int> choose(const StationView& st, int escalation) const;
     int next_capacity(const StationView& st) const;
     void observe(const Measured& m, std::string_view submode, double now);
+    void update_measured(const Measured& m);
     // usable: nullopt (KISS: no control) = any codeword decoded.
     void outcome(std::string_view submode, int decoded, int sent, std::optional<bool> usable = std::nullopt);
     GearRecommendation recommend(const StationView& st);
+    // the outcome model's gap input (policy.py GearShifter.gap)
+    double gap(const StationView& st) const {
+        return st.tx_end ? *st.tx_end + REPLY_HOLD_MARGIN_S - measured_at : gap_s;
+    }
     // the gate's model applies (policy.py GearShifter.gate)
     // 0 the installed model, 1 the gate's, 2 the fast region's
     int gate() const;
     // the CPM floor holds (policy.py GearShifter.cpm_floor)
     bool cpm_floor() const;
+    // the peer's last burst read as a weak or fast path, or none measured (policy.py GearShifter.weak_path)
+    bool weak_path() const {
+        const bool fast = heard_spread && *heard_spread >= ROBUST_START_SPREAD_HZ;  // its own, not the carried one
+        return !(measured && measured->snr_est >= ROBUST_START_SNR_DB && !fast);
+    }
     void observe_energy(double snr_db, double now);
     // the energy inputs (mean dB in power, fill, 1); nullopt before any
     std::optional<std::array<double, 3>> energy_features() const;
@@ -165,11 +191,16 @@ public:
     std::optional<double> snr_est() override;
     std::string measured_extra() override;
     double airtime(const std::string& submode, int n_cw, bool dup) override;
-    std::string connect_mode(int cap, int tries) override;
+    std::string connect_mode(int cap, int tries, bool last) override;
+    bool weak_path() override { return shifter.weak_path(); }
+    void robust_started() override { shifter.start_bound = true; }
+    bool robust(const std::string& submode) override { return submode == ROBUST_CONNECT || submode == ROBUST_FAST; }
     std::optional<double> reply_hold(Station& st, const TxBurst& burst) override {
         return shifter.reply_hold(view(st), burst.submode);
     }
     void observe(const Measured& m, const std::string& submode, double now) override { shifter.observe(m, submode, now); }
+    std::optional<Measured> last_measured() const override { return shifter.measured; }
+    void update_measured(const Measured& m) override { shifter.update_measured(m); }
     void observe_energy(double snr_db, double now) override { shifter.observe_energy(snr_db, now); }
     std::optional<std::pair<std::string, double>> expected_reply() const override { return shifter.expected_reply(); }
     std::optional<int> next_capacity(const Station& st) const override { return shifter.next_capacity(view(st)); }

@@ -8,7 +8,10 @@ from data2g.arq import frames as F
 from data2g.arq import phy as PHY
 from data2g.arq import session as S
 from data2g.arq.engine import Engine
-from data2g.config import FS, SNR_REF_BW_HZ
+from data2g.arq.modes import BW_NAME
+from data2g.config import FM_TX_PEAK, FS, PROFILE, SNR_REF_BW_HZ
+
+NARROW_BCAST = "n10-qpsk-r1/3" if PROFILE == "fm" else "n4-qpsk-r1/3"  # a 500 Hz broadcast mode (FM has no n4)
 
 BLOCK = FS // 10
 
@@ -19,7 +22,9 @@ def link(a: Engine, b: Engine, snr_db: float, seconds: float, until, seed=0):
     rng = np.random.default_rng(seed)
     sigma = np.sqrt((FS / 2) / SNR_REF_BW_HZ / 10 ** (snr_db / 10))
     a_out = b_out = np.zeros(BLOCK)
-    g = 2.2  # an Engine plays bursts at peak 1.0: ~unit RMS again (peak/RMS ~2.2 after the clipper)
+    # HF: an Engine plays bursts at peak 1.0, ~unit RMS again (peak/RMS ~2.2 after the clipper);
+    # FM: at one fixed scale, unit RMS over config.FM_TX_PEAK (phy.full_scale)
+    g = 2.2 if PROFILE == "hf" else FM_TX_PEAK
     for _ in range(int(seconds * FS / BLOCK)):
         a_out, _ = a.step(g * b_out + rng.normal(0, sigma, BLOCK))
         b_out, _ = b.step(g * a_out + rng.normal(0, sigma, BLOCK))
@@ -100,6 +105,26 @@ def test_id_frames_during_and_after_a_session(tmp_path):
     is_id = lambda e: bytes.fromhex(e["slots"][0]["payload"])[4:5] == bytes([F.T_ID])  # noqa: E731 (first TLV's type)
     pairs = [(p, q) for p, q in zip(tx, tx[1:]) if is_id(p) and q["slots"][0]["mask"][0]]
     assert pairs and all(abs(q["t"] - (p["t"] + p["seconds"])) < 1e-9 for p, q in pairs)
+
+
+def test_dd_budget_is_what_the_turnaround_leaves(monkeypatch, pure):
+    """In a session DD stops at my reply's latest start: my own t_turn (the
+    one I advertise; the peer's, 3.0 here, is for my reply timers) past the
+    burst's end, less PTT, TX latency and time since the block came in;
+    DD_BUDGET_S caps it, and alone applies outside a session. (Python's;
+    native's is test_engine.cpp's turnaround_budget.)"""
+    from data2g.arq import engine as EN
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", 5.0)
+    e = EN.Engine("W1AW", ptt_delay_s=0.1)
+    assert e._dd_budget(10.0, 10.3) == 5.0  # idle
+    e.session.state, e.session.t_turn, e.session.peer_t_turn, e.tx_latency_s = S.CONNECTED, 2.0, 3.0, 0.2
+    monkeypatch.setattr("time.monotonic", lambda: e._arrived + 0.05)
+    assert e._dd_budget(10.0, 10.3) == pytest.approx(2.0 - 0.3 - 0.2 - 0.1 - 0.05)
+    assert e._dd_budget(10.0, 12.0) == 0.0
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", 0.5)
+    assert e._dd_budget(10.0, 10.3) == 0.5
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", float("inf"))
+    assert e._dd_budget(10.0, 12.0) == float("inf")  # paired studies: no wall-clock limit
 
 
 def test_tx_samples_is_the_burst_on_air_with_its_ptt_delay():
@@ -322,8 +347,13 @@ def test_buffer_credit_caps_or_disables_the_next_burst_allowance():
         assert f"BUFFER {expect}" in h.out_cmd
 
 
+# "arrives" on FM: 16 dB. FM's predictor moves a reading across bands by
+# offsets measured on the FM channel (discriminator noise: an n10 burst reads
+# 3.9 dB under f55's, predictor.FM_BAND_OFFSET_DB); on this flat AWGN audio
+# they read alike, so the first f55 burst after an n10 connect is 3.9 dB
+# optimistic and did not arrive at 12. tests/test_fm_session.py runs the FM channel.
 @pytest.mark.parametrize("data2g", [False, True])
-@pytest.mark.parametrize("snr", [12, 6])
+@pytest.mark.parametrize("snr", [12 if PROFILE == "hf" else 16, 6])
 def test_cleantxbuffer_mid_burst(data2g, snr):
     """CLEANTXBUFFER while the first data burst is on air: it arrives (12
     dB) or doesn't (6). VARA's replies and BUFFER 0 at once for a VARA
@@ -374,14 +404,14 @@ def test_cleantxbuffer_mid_burst(data2g, snr):
     pump()
     assert a.engine.session.state == S.CONNECTED
     if not data2g:
-        assert bytes(got) == up[:len(got)] and bool(got) == (snr == 12)
+        assert bytes(got) == up[:len(got)] and bool(got) == (snr > 6)
     settled = [x.split() for x in a.out_cmd if x.startswith("CLEANTXBUFFER SETTLED")]
     if data2g:
         drop_from, drop_to, lf, lt = map(int, reply[2:])
         assert drop_to == 19000 and lf < lt == drop_from
         assert len(settled) == 1 and len(settled[0]) == 5
         f, split, t = map(int, settled[0][2:])
-        assert (f, t) == (lf, lt) and split == (lt if snr == 12 else lf) and bytes(got) == up[:split] + up[19000:]
+        assert (f, t) == (lf, lt) and split == (lt if snr > 6 else lf) and bytes(got) == up[:split] + up[19000:]
     else:
         assert not settled
 
@@ -542,7 +572,8 @@ def test_mycall_with_several_calls_answers_each():
     def up():
         a.after_step(bool(a.engine.tx))
         b.after_step(bool(b.engine.tx))
-        return "CONNECTED W1AW KC2G-T 2300" in b.out_cmd and "CONNECTED W1AW KC2G-T 2300" in a.out_cmd
+        want = f"CONNECTED W1AW KC2G-T {BW_NAME[2]}"  # HF 2300, FM WIDE
+        return want in b.out_cmd and want in a.out_cmd
     assert link(a.engine, b.engine, 20, 60, up, seed=33)
 
 
@@ -579,6 +610,7 @@ def test_losing_the_command_client_ends_its_session():
     assert not b.listening and b.engine.session.state != S.LISTEN
 
 
+@pytest.mark.hf_only("CPM modes: FM has none (plan Q2)")
 def test_a_session_in_cpm_modes():
     """Both directions forced onto a CPM mode (control in its short
     codeword, data up to 8 codewords, duplicated control when asked): the
@@ -661,7 +693,7 @@ class _Busy:
     def busy(self):
         return self.t < self.until
 
-    channel_busy = data2g_on_air = busy
+    channel_busy = busy
 
     def feed(self, x):
         self.t += len(x) / FS
@@ -740,14 +772,14 @@ def test_bcast_commands_and_statuses():
     assert not any(c.startswith("BCAST") for c in h.out_cmd)  # not asked for: not sent
     h.out_cmd.clear()
     for line, want in (("BCAST OPEN APRS", "BCAST PORT 1"), ("BCAST OPEN my chat FROM w1aw", "BCAST PORT 2"),
-                       ("BCAST MODE 1 n4-qpsk-r1/3", "OK"), ("BCAST MODE 2 AUTO qpsk-r1/5", "OK"),
+                       (f"BCAST MODE 1 {NARROW_BCAST}", "OK"), ("BCAST MODE 2 AUTO qpsk-r1/5", "OK"),
                        ("BCAST MODE 1 no-such-mode", "WRONG"), ("BCAST MODE 9 qpsk-r1/5", "WRONG"),
                        ("BCAST MODE 1 FAST qpsk-r1/5", "WRONG"), ("BCAST MODE 0 DUP AUTO qpsk-r1/5", "OK"),
                        ("BCAST MODE 0 DUP DUP qpsk-r1/5", "WRONG"), ("BCAST CLOSE 0", "WRONG"),
                        ("BCAST OPEN bad_name", "WRONG"), ("BCAST", "WRONG")):
         h.command(line)
         assert h.out_cmd.pop() == want, line
-    assert (link.ports[1].group, link.ports[1].mode, link.ports[1].auto) == ("APRS", "n4-qpsk-r1/3", False)
+    assert (link.ports[1].group, link.ports[1].mode, link.ports[1].auto) == ("APRS", NARROW_BCAST, False)
     assert (link.ports[2].group, link.ports[2].from_call, link.ports[2].auto) == ("MY CHAT", "W1AW", True)
     assert (link.ports[0].auto, link.ports[0].dup, link.ports[1].dup, link.ports[2].dup) == (True, True, False, False)
     link.enqueue(b"queued", 1)
@@ -769,13 +801,14 @@ def test_bcast_commands_and_statuses():
     # qpsk-r1/5 (46 B): a 256-byte frame (259 B framed) and 4 control codewords sent twice
     assert all(lines[n] == rx[n] for n in lines if n in rx) and lines["qpsk-r1/5"] == 8 + 6
     # then CHANNELS and a THRESHOLD per mode, same order, as mode_thresholds.json has them (99: "-")
-    from data2g.arq.policy import MODE_THRESHOLDS
+    from data2g.arq.policy import MODE_CHANNELS, MODE_THRESHOLDS
 
-    assert h.out_cmd[len(lines)] == "CHANNELS awgn mpg mpp mpd" and len(h.out_cmd) == 2 * len(lines) + 2
+    assert h.out_cmd[len(lines)] == "CHANNELS " + " ".join(MODE_CHANNELS) and len(h.out_cmd) == 2 * len(lines) + 2
     thr = [ln.split() for ln in h.out_cmd[len(lines) + 1:-1]]
     assert [t[:2] for t in thr] == [["THRESHOLD", n] for n in lines]
     assert all(tuple(99.0 if v == "-" else float(v) for v in t[2:]) == MODE_THRESHOLDS[t[1]] for t in thr)
-    assert "-" in {v for t in thr for v in t[2:]}  # the 99 mapping is exercised
+    if any(99.0 in MODE_THRESHOLDS[t[1]] for t in thr):  # the 99 mapping is exercised (FM's fitted table has none)
+        assert "-" in {v for t in thr for v in t[2:]}
     h.client_gone()
     assert list(link.ports) == [0] and (link.ports[0].mode, link.ports[0].auto, link.ports[0].dup) == (BROADCAST[2],
                                                                                                        False, False)
@@ -854,7 +887,7 @@ def test_accept_puts_a_session_on_its_own_connection():
             b_step()
             return cond()
         return f
-    assert link(a.engine, b.engine, 20, 60, pump(lambda: "CONNECTED W1AW K2XYZ 2300" in a.out_cmd))
+    assert link(a.engine, b.engine, 20, 60, pump(lambda: f"CONNECTED W1AW K2XYZ {BW_NAME[2]}" in a.out_cmd))
     conn, _ = srv.accept()  # made when the CONNECT was answered
     conn.settimeout(0.01)
     a.data_in(b"to the server")
@@ -982,7 +1015,7 @@ def test_retries_sets_this_clients_connect_retries():
     a, b = Host(Engine("W1AW", seed=75)), Host(Engine("K2XYZ", seed=76))  # b: not listening, never answers
     for line in ("RETRIES", "RETRIES -1", "RETRIES 21", "RETRIES x", "RETRIES 1.0", "RETRIES 001", "RETRIES"):
         a.command(line)
-    assert a.out_cmd == ["RETRIES 4"] + ["WRONG"] * 4 + ["OK", "RETRIES 1"]
+    assert a.out_cmd == ["RETRIES 5"] + ["WRONG"] * 4 + ["OK", "RETRIES 1"]
     a.command("CONNECT W1AW N0CALL")
 
     def gave_up():
@@ -992,7 +1025,7 @@ def test_retries_sets_this_clients_connect_retries():
     assert a.engine.session.close_reason == "NO_ANSWER" and a.engine.session._tries == 2  # the first and one retry
     a.client_gone()
     a.command("RETRIES")
-    assert a.out_cmd[-1] == "RETRIES 4"  # the default again: the setting was the client's
+    assert a.out_cmd[-1] == "RETRIES 5"  # the default again: the setting was the client's
 
 
 def test_the_shifter_hears_each_peer_bursts_energy():
@@ -1012,6 +1045,7 @@ def test_the_shifter_hears_each_peer_bursts_energy():
     assert b.session.policy.energy_features() is not None
 
 
+@pytest.mark.hf_only("nods answer on CPM grids FM does not listen on (no CPM, plan Q2)")
 def test_nods_on_audio(monkeypatch):
     """A CPM session's control-only replies go as nods (docs/arq.md §3b)
     once the expected slot is learned, and the caller's engine finds them
@@ -1041,6 +1075,24 @@ def test_nods_on_audio(monkeypatch):
     assert sent >= 2 and heard >= sent - 1, (sent, heard)
 
 
+@pytest.mark.hf_only("FM's ROBUST_FAST is its ROBUST_CONNECT")
+def test_pending_on_a_robust_fast_connect_retry():
+    """A CONNECT's last retry goes in ROBUST_FAST (policy.connect_mode): the
+    default "fsk" PENDING raises on it as on ROBUST_CONNECT's. Three tries:
+    the cap's mode (OFDM, none), ROBUST_CONNECT, then ROBUST_FAST, so the
+    second PENDING is ROBUST_FAST's."""
+    a, b = Engine("W1AW", seed=81), Engine("K2XYZ", seed=82)
+    b.listen()
+    seen = []
+
+    def drain():
+        seen.extend(e for e in b.events() if e in ("PENDING", "CANCELPENDING"))
+        return len(seen) >= 4
+    a.connect("N0CALL", 2, tries=3)
+    assert link(a, b, 20, 120, drain, seed=83)
+    assert seen == ["PENDING", "CANCELPENDING"] * 2, seen
+
+
 def test_pending_on_a_connect_header_then_connected_or_cancelled():
     """PENDING: raised on a header that may be a CONNECT while
     listening, before its callee is known; CONNECTED follows if it was mine,
@@ -1065,52 +1117,3 @@ def test_pending_on_a_connect_header_then_connected_or_cancelled():
     assert link(a, b, 20, 60, lambda: drain() or b.session.state == S.CONNECTED, seed=74)
     drain()
     assert seen == ["PENDING", "CONNECTED W1AW"], seen
-
-
-class _OnAir(_Busy):
-    """Nothing locked, but a Data2G burst on the air (Receiver.data2g_on_air)
-    until `until`: one whose start we missed."""
-
-    busy = False
-
-    @property
-    def data2g_on_air(self):
-        return self.t < self.until
-
-    channel_busy = data2g_on_air  # (nothing locked: BUSY is it)
-
-
-def test_kiss_waits_out_a_burst_heard_without_its_header():
-    """A burst we hold no lock on holds a queued KISS burst as BUSY does
-    (two stations that each missed the other's start talked over each
-    other), up to busy_limit_s; once it is gone the burst goes."""
-    from data2g.kisslink import KissLink
-
-    e = Engine("W1AW", seed=1, kiss=KissLink(persist=255))
-    assert e.receiver is None or e.receiver.sense  # (the native engine's own receiver: set in C++)
-    e.receiver = _OnAir(until=2.0)
-    e.kiss.enqueue(b"frame")
-    assert 2.0 <= _first_tx(e, 6) <= 2.2
-    e = Engine("W1AW", seed=1, kiss=KissLink(busy_limit_s=5.0))
-    e.receiver = _OnAir(until=1e9)
-    e.kiss.enqueue(b"frame")
-    assert 5.0 <= _first_tx(e, 8) <= 5.2
-    r = Engine("W1AW", seed=1).receiver
-    assert r is None or r.sense  # BUSY reads it too, KISS or not
-
-
-def test_busy_is_off_while_we_transmit():
-    """The receiver hears nothing while we transmit, so its last reading
-    (here a burst on air past busy_limit_s, sent over anyway) is not BUSY."""
-    from data2g.kisslink import KissLink
-
-    e = Engine("W1AW", seed=1, kiss=KissLink(busy_limit_s=1.0))
-    e.receiver = _OnAir(until=1e9)
-    e.kiss.enqueue(b"frame")
-    states = []
-    for _ in range(int(3 * FS / BLOCK)):
-        ptt = e.step(np.zeros(BLOCK))[1]
-        states.append((ptt, e.channel_busy))
-    assert any(p for p, _ in states)
-    assert all(not b for p, b in states if p)
-    assert all(b for _, b in states[:int(0.9 * FS / BLOCK)])

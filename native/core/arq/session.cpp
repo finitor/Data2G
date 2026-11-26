@@ -72,6 +72,23 @@ Session::Session(std::string call_, std::shared_ptr<Policy> policy_, double t_tu
       rng(rng_ ? std::move(rng_) : std::make_shared<DefaultRng>()), aliases(std::move(aliases_)),
       stats_interval_s(stats_interval_s_) {}
 
+// session._robust_start: the connect frame came in a retry's mode, so the cap's connect mode was not
+// answered. One decision, the caller's: if its reading of the CONNECT_ACK says the path is why
+// (Policy::weak_path), it starts at the top of the escalation floor (it decays as any does); the callee
+// follows the mode of the caller's first burst (on_rx).
+void Session::robust_start(const std::string& mode) {
+    // any retry's mode: a robust one (Policy::robust) that is not the cap's connect mode. A policy may change
+    // mode among its retries, and by more than the try's number, which the callee does not know
+    if (mode == policy->connect_mode(cap, 0, false) || !policy->robust(mode)) return;
+    if (!station->master) {
+        follow_start = true;
+    } else if (policy->weak_path()) {
+        log_write(LOG, INFO, format("connected in %s on a weak path: starting at the robust floor", mode.c_str()));
+        station->esc_floor = MAX_ESCALATION;
+        policy->robust_started();
+    }
+}
+
 std::shared_ptr<Station> Session::make_station(int direction, bool master_, int key) {
     auto st = std::make_shared<Station>(direction, policy, master_, key, std::nullopt, cap, chat);
     st->nod = nods;  // nods (docs/arq.md §3b): a session's station, unless the host turned them off
@@ -126,6 +143,7 @@ Bytes Session::read() { return station ? station->read() : Bytes{}; }
 
 TxBurstPtr Session::poll(double now) {
     now_ = now;
+    if (station) station->now = now;  // the shifter's gap input (Station::est_tx_end)
     if (stats_interval_s && live(state) && now >= stats_since + stats_interval_s) {
         log_stats("stats", now, stats_since, stats_prev);
         stats_since = now;
@@ -206,18 +224,34 @@ void Session::on_tx_end(const TxBurstPtr& burst, double now) {
     // only the caller retries (§6), and a callee's DISC
     if ((m && (state == SessionState::CONNECTING || state == SessionState::CONNECTED)) || state == SessionState::DISCONNECTING) {
         double wait = tune.reply_start_s;
-        // DISC_ACK uses this DISC's mode and slot count. Even if its header is
-        // lost, leave time for the whole reply after it starts.
-        if (state == SessionState::DISCONNECTING && burst)
-            wait += policy->airtime(burst->submode, static_cast<int>(burst->slots.size()), false);
+        if (state == SessionState::DISCONNECTING && burst) {
+            const int n_cw = static_cast<int>(burst->slots.size());
+            const double ack = policy->airtime(burst->submode, n_cw, false);
+            if (tries == 0) disc_from = now - ack;
+            disc_last = !disc_retry_fits(now, ack, *burst);
+            // DISC_ACK uses this DISC's mode and slot count. Even if its header is lost, a retry must not
+            // key over the whole reply; before no retry, a missed header leaves nothing to decode.
+            if (!disc_last) wait += ack;
+        }
         // a reply whose header I miss is still on air: don't poll over it
         if (state == SessionState::CONNECTED && station && burst)
             if (auto hold = policy->reply_hold(*station, *burst)) wait = std::max(wait, *hold);
-        deadline = now + t_turn + wait;
+        deadline = now + peer_turn() + wait;
     } else if (!m) {
         quiet_from = now;
-        wake_wait = t_turn + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
+        wake_wait = peer_turn() + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
     }
+}
+
+// Whether another DISC try follows `burst`, which ended at `end`: tries left, and the retry's reply window
+// ends within disc_budget_s of the first try, the reply to this one (`ack` s) waited out first. A retry after
+// a robust try stays in its mode; else it takes connect_mode for its try (session.py).
+bool Session::disc_retry_fits(double end, double ack, const TxBurst& burst) const {
+    if (tries + 1 >= tune.disc_tries) return false;
+    const std::string mode = policy->robust(burst.submode) ? burst.submode : policy->connect_mode(cap, tries + 1, false);
+    const double next = policy->airtime(mode, static_cast<int>(burst.slots.size()), false);
+    const double window = peer_turn() + tune.reply_start_s;
+    return end + window + ack + next + window <= disc_from + tune.disc_budget_s;
 }
 
 void Session::on_header(const std::string& submode, int n_cw, double now) {
@@ -225,8 +259,8 @@ void Session::on_header(const std::string& submode, int n_cw, double now) {
     if (deadline) {
         // a peer's ID burst (one codeword in the connect mode) runs straight
         // into its reply, whose header must still be found (engine ID_INTERVAL_S)
-        const bool is_id = n_cw == 1 && submode == policy->connect_mode(cap, 0);
-        deadline = std::max(*deadline, end + t_turn + (is_id ? tune.reply_start_s : 0.0));
+        const bool is_id = n_cw == 1 && submode == policy->connect_mode(cap, 0, false);
+        deadline = std::max(*deadline, end + peer_turn() + (is_id ? tune.reply_start_s : 0.0));
     }
     if (!master()) quiet_from = std::max(quiet_from, end);
 }
@@ -236,10 +270,17 @@ void Session::on_cw(double now) {
     if (!master()) quiet_from = std::max(quiet_from, now);
 }
 
+void Session::refine_measured(RxBurst& rx) {
+    if (const auto m = policy->last_measured())
+        if (const auto upd = rx.measure_data(*m)) policy->update_measured(*upd);
+}
+
 void Session::on_rx(RxBurst& rx, double now) {
+    if (station) station->now = now;
     auto f = session_frame(rx);
     if (!f) f = repeated_frame(rx, now);
     if (f) {
+        refine_measured(rx);
         on_session_frame(*f, now);
         return;
     }
@@ -248,6 +289,11 @@ void Session::on_rx(RxBurst& rx, double now) {
     const size_t undrained = st->rx.out.size();
     const bool limbo = st->tx.limbo.has_value();
     if (!st->handle(rx)) return;  // not ours, or unreadable: stay silent (§3)
+    rx_mode = rx.submode();
+    if (follow_start) {  // the callee, connected in the robust mode: as the caller started (robust_start)
+        follow_start = false;
+        if (policy->robust(rx.submode())) st->esc_floor = MAX_ESCALATION;
+    }
     heard(now);
     if (st->state == LinkState::FAILED) {
         close("LINK_FAILED " + st->fail_reason);
@@ -341,9 +387,27 @@ void Session::disconnect() {
 bool Session::disc(double now) {
     if (!want_disc || station->tx.pending()) return false;
     tries = 0;
+    disc_mode = session_mode();
     queue(disc_burst(), now);
     state = SessionState::DISCONNECTING;
     return true;
+}
+
+// The robust control mode this session is running in, if it is: the peer's last burst my link took,
+// else my link's last burst (Station::last_sent, never a session frame), whichever is robust
+// (policy.robust()); before any link burst either way, at the robust floor, the first connect retry's
+// mode; none: connect_mode (session.py _session_mode). The connect frames decide nothing: a robust
+// retry answered on a good path starts at the bottom (robust_start) and its first-turn DISC stays in
+// the connect mode. A DISC goes in it, every try; the DISC_ACK answers in the DISC's mode.
+std::optional<std::string> Session::session_mode() const {
+    const std::string sent = station->last_sent ? station->last_sent->submode : std::string();
+    for (const std::string* m : {&rx_mode, &sent})
+        if (!m->empty() && policy->robust(*m)) return *m;
+    if (rx_mode.empty() && sent.empty() && station->esc_floor >= MAX_ESCALATION) {
+        const std::string m = policy->connect_mode(cap, 1, false);
+        if (policy->robust(m)) return m;
+    }
+    return std::nullopt;
 }
 
 std::optional<double> Session::wake_time() {
@@ -373,8 +437,17 @@ void Session::close(const std::string& why, TxBurstPtr final_burst, double now) 
     deadline.reset();
 }
 
+// The peer's turnaround my reply timers allow: its advertised t_turn in a session, else mine (session.py).
+double Session::peer_turn() const {
+    if ((state == SessionState::CONNECTED || state == SessionState::DISCONNECTING) && peer_t_turn) return *peer_t_turn;
+    return t_turn;
+}
+
 void Session::connected(double now) {
     state = SessionState::CONNECTED;
+    rx_mode.clear();
+    disc_mode.reset();
+    station->now = now;
     heard(now);
     last_data = connected_at = stats_since = now;
     stats_prev.clear();
@@ -430,8 +503,11 @@ void Session::on_timeout(double now) {
     } else if (state == SessionState::DISCONNECTING) {
         tries += 1;
         log_write(LOG, INFO, format("no answer to DISC, try %d of %d", tries, tune.disc_tries));
-        if (tries >= tune.disc_tries)
+        if (tries >= tune.disc_tries || disc_last) {
+            if (tries < tune.disc_tries)
+                log_write(LOG, INFO, format("no DISC retry: it would end past %.0f s from the first", tune.disc_budget_s));
             close(disc_why + " unconfirmed");
+        }
         else
             queue(disc_burst(), now);
     } else if (state == SessionState::CONNECTED) {
@@ -450,7 +526,7 @@ void Session::on_timeout(double now) {
 // frames use key 0 (no session yet); DISC / DISC_ACK the session key.
 
 TxBurstPtr Session::session_burst(int direction, int key, const Bytes& body, std::optional<std::string> mode) {
-    const std::string m = (mode && !mode->empty()) ? *mode : policy->connect_mode(cap, tries);
+    const std::string m = (mode && !mode->empty()) ? *mode : policy->connect_mode(cap, tries, body[0] == CONNECT && tries == tune.connect_tries - 1);
     const int cpb = policy->ctl_payload_bytes(m);
     auto b = std::make_shared<TxBurst>();
     b->submode = m;
@@ -482,7 +558,7 @@ TxBurstPtr Session::connect_burst() {
     return session_burst(0, 0, Connect{VERSION, call, peer, nonce, cap, tenths(t_turn)}.pack());
 }
 
-TxBurstPtr Session::disc_burst() { return session_burst(station->direction, station->key, Bytes{DISC}); }
+TxBurstPtr Session::disc_burst() { return session_burst(station->direction, station->key, Bytes{DISC}, disc_mode); }
 
 TxBurstPtr Session::accept_burst() {
     return session_burst(1, 0, ConnectAck{nonce, cap, tenths(t_turn)}.pack(), answer_mode);
@@ -639,6 +715,7 @@ void Session::on_session_frame(const Frame& f, double now) {
         if (callee != me && std::find(aliases.begin(), aliases.end(), callee) == aliases.end()) return;
         if (station && !master() && n == nonce) {
             answer_mode = f.mode;
+            if (!station->peer_burst) robust_start(f.mode);  // no burst heard yet: I follow the caller's first (session.py)
             queue(accept_burst(), now);  // our ACK was lost: say it again
             return;
         }
@@ -659,7 +736,10 @@ void Session::on_session_frame(const Frame& f, double now) {
         peer = caller;
         nonce = n;
         cap = std::min(c.cap, cap);
+        peer_t_turn = c.t_turn10 / 10.0;
         station = make_station(1, false, session_key(caller, call, n));
+        follow_start = false;
+        robust_start(f.mode);
         flush_writes();
         connected(now);
         events.push_back("CONNECTED " + caller);
@@ -669,7 +749,10 @@ void Session::on_session_frame(const Frame& f, double now) {
         const ConnectAck a = ConnectAck::unpack(body);
         if (a.nonce != nonce) return;
         cap = std::min(a.cap, cap);
+        peer_t_turn = a.t_turn10 / 10.0;
         station = make_station(0, true, session_key(call, peer, nonce));
+        follow_start = false;
+        robust_start(f.mode);
         flush_writes();
         connected(now);
         events.push_back("CONNECTED " + peer);

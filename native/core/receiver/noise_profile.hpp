@@ -2,7 +2,8 @@
 // per sub-band, from 0.1 s blocks of idle audio (median power, and the 90th
 // percentile over it), impulses per minute, and a burst's in-band SNR from
 // power alone. The engine feeds it what it hears and marks bursts and its
-// own transmissions. Times are sample indices, round(t * FS).
+// own transmissions, and marks mutes itself (other programs sharing the
+// radio: receiver.py). Times are sample indices, round(t * FS).
 #pragma once
 
 #include <array>
@@ -36,7 +37,12 @@ public:
     static constexpr int PIECE = config::FS / 100;  // impulse detection: 10 ms pieces
     static constexpr double IMPULSE_X = 10.0;       // over the block's median piece RMS
     static constexpr std::size_t RECENT = 400;      // blocks (40 s) of spectra kept for span_snr_db
+    static constexpr double MUTE_X = 0.01;          // a block under this x the kept median power is a mute
+    static constexpr double MUTE_PAD_S = 1.0;       // not noise either side of a mute
     using Spectrum = std::vector<double>;           // a block's power spectrum, rfft bins 0..BLOCK/2
+    // span_snr_db's AGC gauge (receiver.py GAUGE_HZ): the passband outside the burst's band and a guard
+    static constexpr double GAUGE_LO_HZ = 150.0, GAUGE_HI_HZ = 3100.0, GAUGE_GUARD_HZ = 50.0;
+    static constexpr double GAUGE_MIN = 1e-3;  // the most it scales the floor down (30 dB)
 
     NoiseProfile();
     void feed(std::span<const double> x, double t_start);  // heard from t_start (s); a gap starts a new block
@@ -48,7 +54,8 @@ public:
     std::vector<Spectrum> span_spectra(double start, double end) const;
     // A burst's in-band SNR from power alone (receiver.py NoiseProfile.span_snr_db):
     // its blocks' mean power in lo..hi Hz over the floor (the kept blocks'
-    // median, or floor_spectra's), excess over 1, in SNR_REF_BW_HZ; dB.
+    // median, or floor_spectra's), excess over 1, in SNR_REF_BW_HZ; dB. The
+    // floor is scaled by the out-of-band level's fall under the burst (receiver AGC).
     std::optional<double> span_snr_db(const std::vector<Spectrum>& spectra, double lo, double hi,
                                       const std::vector<Spectrum>* floor_spectra = nullptr) const;
     // the span's in-band power over the floor in the kept blocks' own spread (median, MAD), scaled to
@@ -71,6 +78,7 @@ private:
     std::deque<Block> pending_;
     std::vector<std::pair<std::int64_t, std::int64_t>> busy_;
     std::deque<std::array<double, 5>> kept_;
+    std::deque<double> kept_total_;  // kept_'s band powers summed (mutes' reference)
     std::deque<int> kept_impulses_;
     std::deque<Spectrum> kept_spec_;
     static std::vector<std::size_t> band_bins(double lo, double hi);  // rfft bins in lo..hi Hz

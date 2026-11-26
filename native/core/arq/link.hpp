@@ -111,11 +111,20 @@ public:
     virtual std::string measured_extra() { return {}; }  // after snr_est: spread, delay, MI
     // session
     virtual double airtime(const std::string&, int /*n_cw*/, bool /*dup*/) { return 0.0; }
-    virtual std::string connect_mode(int /*cap*/, int /*tries*/) { return {}; }
+    virtual std::string connect_mode(int /*cap*/, int /*tries*/, bool /*last*/) { return {}; }  // last: a CONNECT's last try
+    // Session::robust_start, the caller's: the peer's last burst as measured says the path is why the cap's
+    // connect mode was not answered (no opinion: it was not, as robust()); and whether a submode is a robust control mode
+    virtual bool weak_path() { return false; }
+    // Session::robust_start, the caller's: the session starts at the robust floor
+    virtual void robust_started() {}
+    virtual bool robust(const std::string& /*submode*/) { return false; }
     // seconds past t_turn to wait for a reply to `burst` (nullopt: none, REPLY_START_S alone)
     virtual std::optional<double> reply_hold(Station&, const TxBurst&) { return std::nullopt; }
     // engine: the receiver's measurements of a peer burst
     virtual void observe(const Measured&, const std::string& /*submode*/, double /*now*/) {}
+    // post-decode data-aided MER update (issue #290)
+    virtual std::optional<Measured> last_measured() const { return std::nullopt; }
+    virtual void update_measured(const Measured&) {}
     // engine: a peer burst's in-band SNR from power alone (the energy inputs)
     virtual void observe_energy(double /*snr_db*/, double /*now*/) {}
     // engine: the burst I asked the peer for last, its mode and seconds on air (nullopt: none)
@@ -242,6 +251,8 @@ public:
     bool peer_reply_lost = false;  // the peer's last burst said its previous reply was lost
     bool peer_abandon = false;  // the peer's last burst carried T_ABANDON: it holds re-sliced data
     std::optional<int> peer_reply_recommend;
+    std::optional<double> now;     // the caller's clock, set by Session (nullopt: the shifter's fixed gap_s)
+    std::optional<double> tx_end;  // build(): when the burst being built should end, for the shifter (est_tx_end)
     TxSide tx;
     std::map<std::string, std::int64_t> stats;
     RxSide rx;
@@ -310,6 +321,9 @@ public:
     // bursts that acted on one that did
     bool peer_said_keep_ = false;
     Told keep_seen_;
+    // the peer's T_NODS likewise: its latest burst carried it; my bursts that acted on one that did
+    bool peer_said_nods_ = false;
+    Told nods_seen_;
     // ... and the peer reads my controls so (reply_held): its latest burst acted on a T_KEEP burst of mine;
     // my bursts that acted on such a burst
     bool peer_acked_keep_ = false;
@@ -393,6 +407,7 @@ private:
     };
     int escalation() const;
     bool data_allowed(bool fresh, const std::string& submode);
+    std::optional<double> est_tx_end(const std::string& submode, int max_cw, std::size_t missing, bool fresh);
     std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
                                                          int said, const Ext& ext) const;
     static Kept kept(const Core& core, int said, const Ext& ext);
@@ -459,6 +474,7 @@ private:
     std::string mode(std::optional<int> rec);
     std::string burst_desc(const std::string& submode, int n_cw, bool dup = false);
     std::string snr();
+    void refine_measured(RxBurst& rx);
 };
 
 }  // namespace data2g::arq

@@ -135,6 +135,9 @@ class Policy:
         decoded of those sent, `usable`: its control decoded (the gear
         shifter's online correction)."""
 
+    def update_measured(self, measured: dict):
+        """Refine the last burst's measurements after decoding (data-aided MER)."""
+
     # for the log
     measured: dict | None = None  # the peer's last burst, as measured
 
@@ -149,9 +152,27 @@ class Policy:
 
     # -- session.Session
 
-    def connect_mode(self, cap: int, tries: int = 0) -> str:
-        """The mode of session frames at bandwidth cap `cap`, `tries` retries in."""
+    def connect_mode(self, cap: int, tries: int = 0, last: bool = False) -> str:
+        """The mode of session frames at bandwidth cap `cap`, `tries` retries
+        in; `last`, a CONNECT's last try."""
         raise NotImplementedError
+
+    def weak_path(self) -> bool:
+        """Session._robust_start, the caller's: whether the peer's last burst
+        as measured (a CONNECT_ACK in a retry's robust mode) says the path is
+        why the cap's connect mode was not answered. No opinion: it was not
+        (as robust()'s: neither side of such a policy's session starts at
+        the floor; True here with robust() False started the caller alone)."""
+        return False
+
+    def robust_started(self):
+        """Session._robust_start, the caller's: the session starts at the
+        robust floor (a policy may then ask for its first data cautiously)."""
+
+    def robust(self, submode: str) -> bool:
+        """Whether `submode` is a robust control mode (the callee follows a
+        caller whose first burst comes in one)."""
+        return False
 
     def reply_hold(self, station: "Station", burst: "TxBurst") -> float | None:
         """Seconds past t_turn to wait for a reply to `burst` (None:
@@ -495,6 +516,8 @@ class Station:
     peer_reply_lost: bool = False  # the peer's last burst said its previous reply was lost
     peer_abandon: bool = False  # the peer's last burst carried T_ABANDON: it holds re-sliced data
     peer_reply_recommend: int | None = None  # ... for my control-only bursts
+    now: float | None = None  # the caller's clock, set by session.Session (None: the shifter's fixed gap_s)
+    tx_end: float | None = None  # build(): when the burst being built should end, for the shifter (_tx_end)
     tx: TxSide = field(default_factory=TxSide)
     stats: Counter = field(default_factory=Counter)  # for the log: cw_new, cw_comp, cw_resend, rx_ok, rx_lost, timeouts
     rx: RxSide = field(default_factory=RxSide)
@@ -558,6 +581,10 @@ class Station:
     # its own _keep_told)
     _peer_said_keep: bool = False
     _keep_seen: Told = field(default_factory=Told)
+    # the peer's T_NODS likewise: its latest burst carried it; my bursts that acted on one that did
+    # (once it acts on one of those it says T_NODS no more: expect's hypotheses leave it out)
+    _peer_said_nods: bool = False
+    _nods_seen: Told = field(default_factory=Told)
     # ... and the peer reads my controls so (its own _peer_keeping; _reply_held): its latest
     # burst acted on a T_KEEP burst of mine; my bursts that acted on such a burst
     _peer_acked_keep: bool = False
@@ -608,6 +635,8 @@ class Station:
         submode, max_cw = self.policy.choose(self, escalation)
         if not self._data_allowed(fresh, submode):
             max_cw = 0  # control only
+        missing = self.tx.missing() if fresh else []
+        self.tx_end = self._tx_end(submode, max_cw, missing, fresh)
         rec, hint, reply = self.policy.recommend(self)  # what the peer should send me next (§8)
         ext, reply_same = self._control_tlvs(bn, reply)
         core = F.Core(ftype=F.ARQ if fresh else F.PROBE, burst_seq=bn % F.BURST_MOD, acted_on=self._acted_on,
@@ -616,7 +645,6 @@ class Station:
 
         # control codewords: CPM carries control in a short codeword, one per burst
         cpb = self.policy.ctl_payload_bytes(submode)
-        missing = self.tx.missing() if fresh else []
         has_new = fresh and self.new_available() > 0
         k, has_new, bitmap, n_ctl, dup = self._fit(ext, core.cum, missing, has_new, max_cw, submode, fresh)
         # what this burst's ACK conveys, exactly (the snapshot must match it)
@@ -688,6 +716,8 @@ class Station:
         self._asked = (rec, *replies)
         if self._peer_said_keep:
             self._keep_seen.mark(bn)  # it acts on a peer burst that carried T_KEEP
+        if self._peer_said_nods:
+            self._nods_seen.mark(bn)  # ... or T_NODS
         if self._peer_acked_keep:
             self._keep_sure.mark(bn)  # ... on one that acted on a T_KEEP of mine
         ctl = F.Control(core, ext).pack(cpb)
@@ -711,6 +741,23 @@ class Station:
         if log.isEnabledFor(logging.INFO):
             self._log_tx(bn, burst, fresh, core, ext, dup, resend, rvs, new, escalation, hint, reply, inline)
         return burst
+
+    def _tx_end(self, submode: str, max_cw: int, missing: list[int], fresh: bool) -> float | None:
+        """When the burst being built should end (None: no clock, or a
+        policy without airtime). The shifter's gap input is the time from
+        the peer burst it measured to the start of the one it predicts
+        (scripts/session_data.py); that one follows this burst. Estimated
+        before _fit: one control codeword (a control that spills into
+        a second, ~0.5 s in a 4-byte ack mode, is missed), then resends and
+        new codewords as queued, up to max_cw."""
+        if self.now is None:
+            return None
+        n = 1
+        if max_cw:
+            new = -(-self.new_available() // self.policy.payload_bytes(submode)) if fresh else 0
+            n += min(max_cw - 1, len(missing) + new)
+        s = self.policy.airtime(submode, n)
+        return None if s is None else self.now + s
 
     def _data_tlvs(self, resend: list[int], rvs: list[int], new: list[Codeword]) -> dict:
         """T_RV, T_NEW and T_COMP for these data slots."""
@@ -1033,9 +1080,17 @@ class Station:
         if not m or "snr_est" not in m:
             return ""
         mi = "/".join(f"{v:.2f}" for k, v in m.items() if k.startswith("mi_"))  # predictor.CONSTS' order
-        return (f" | snr {m['snr_est']:.1f} dB, spread {m.get('spread_est', 0.0):.2f} Hz,"
+        mer = f", mer {m['mer_db']:.1f} dB" if "mer_db" in m and m["mer_db"] is not None else ""
+        return (f" | snr {m['snr_est']:.1f} dB{mer}, spread {m.get('spread_est', 0.0):.2f} Hz,"
                 f" delay {m.get('delay_est_ms', 0.0):.1f} ms" + (f", mi {mi}" if mi else "")
                 + (f", energy {self.policy.energies[-1]:.1f} dB" if getattr(self.policy, "energies", None) else ""))
+
+    def _refine_measured(self, rx: RxBurst):
+        """Post-decode data-aided MER update (phy.ModemRx.measure_data), if supported."""
+        if self.policy.measured is not None and hasattr(rx, "measure_data"):
+            upd = rx.measure_data(self.policy.measured)
+            if upd is not None:
+                self.policy.update_measured(upd)
 
     def _comp_bit(self, seq: int) -> bool:
         c = self.tx.cws[seq]
@@ -1094,6 +1149,7 @@ class Station:
         this station must answer). Discards the burst otherwise."""
         self.stats["rx_ok" if (ok := self._handle(rx)) else "rx_lost"] += 1
         if not ok:
+            self._refine_measured(rx)
             log.info("RX %s%s | control lost, discarded", self._burst_desc(rx.submode, rx.n_cw), self._snr())
         return ok
 
@@ -1112,6 +1168,7 @@ class Station:
             self._peer_acked_keep = self._keep_told.acted(acted)
             self._keep_seen.acted(acted)
             self._keep_sure.acted(acted)
+            self._nods_seen.acted(acted)
             # without T_REPLY: none (_note_peer), or as it was where the peer keeps it (T_KEEP),
             # this burst's acted-on counted
             if F.T_REPLY not in ext and self._peer_keeping:
@@ -1123,6 +1180,7 @@ class Station:
         except ProtocolError as e:
             self._fail(f"protocol: {e}")
             return True
+        self._refine_measured(rx)
         if log.isEnabledFor(logging.INFO):
             self._log_rx(rx, core, dup, slots, n_dec, n_old, before, was, repeat, abandoned)
         self.reply_lost = repeat
@@ -1133,6 +1191,7 @@ class Station:
             self.nod_peer = True  # latched for the session
         self._nods_told.acted(acted)
         self._peer_said_keep = F.T_KEEP in ext
+        self._peer_said_nods = F.T_NODS in ext
         if F.T_KEEP in ext:
             self.keep_peer = True  # latched for the session
         self._peer_ctl[bool(slots)] = self._last_stream
@@ -1278,6 +1337,27 @@ class Station:
                     + [(c, [(t, v, b"\xc0") if t == F.T_REPLY and v else (t, v, m) for t, v, m in e]) for c, e in base
                        if any(t == F.T_REPLY and v for t, v, _ in e)]
                     + self._reply_changes(base))
+            if not data and not self._peer_ctl:
+                # Before a peer control was read, also try the session's initial
+                # capability announcements, with build()'s padding/replace rule.
+                # Keep the original ways for peers that do not announce them.
+                # Announced first: PRIME_TRIES can cut the old ways, a cost to legacy peers only
+                # (interleaving loses both kinds once the bank is full, as with data in flight).
+                announced = []
+                n_ctl = 1 if ctl_slots else rx.n_cw
+                for c, e in ways:
+                    a = list(e)
+                    fits = lambda: self._fits_padding({t: v for t, v, _ in a}, n_ctl, cpb)
+                    if NOD and self.nod and fits():
+                        a.append((F.T_NODS, b"", b""))
+                    if KEEP and self.keep:
+                        if fits():
+                            a.append((F.T_KEEP, b"", b""))
+                        elif any(t == F.T_REPLY for t, _, _ in a) and n_ctl < max_ctl:
+                            a = [t for t in a if t[0] != F.T_REPLY] + [(F.T_KEEP, b"", b"")]
+                    if a != e:
+                        announced.append((c, a))
+                ways = announced + ways
             for core, ext in ways:
                 # an OFDM control-only burst is its control: n_cw codewords, the
                 # last ones maybe all padding (build reserves room for data it may not send)
@@ -1337,10 +1417,11 @@ class Station:
             # unknown, 6 bits (at code level 0.0-0.2 dB on a CPM control)
             recommend=(0, 0),
             size_hint=(self.peer_size_hint, 3 if base else 0))
-        # (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more
-        # once the peer has acted on that, _keep_seen: its last control of this kind may be older)
+        # (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. Neither any more
+        # once the peer has acted on that, _keep_seen and _nods_seen: its last control of this
+        # kind may be older)
         common = [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP)
-                  if t in pe and not (t == F.T_KEEP and self._keep_seen)]
+                  if t in pe and not (t == F.T_KEEP and self._keep_seen) and not (t == F.T_NODS and self._nods_seen)]
         # T_REPLY, a recommendation: as last time (80% of them at the floor; its
         # bits sit on weak polar positions, where 6 unknown cost 1-2 dB). A peer that keeps
         # it (T_KEEP) says it until its handshake ends, then mostly leaves it out (unchanged);

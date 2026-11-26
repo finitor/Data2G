@@ -24,7 +24,7 @@
 #                          still builds the rig controller and PTT keyer.
 
 cmake_minimum_required(VERSION 3.24)
-project(data2g_native VERSION 0.5.2 LANGUAGES CXX)
+project(data2g_native VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,7 +83,28 @@ list(FILTER DATA2G_CORE_SOURCES EXCLUDE REGEX "/core/[^/]+/(qt|android|hamlib|mi
 if(WIN32)
   list(FILTER DATA2G_CORE_SOURCES EXCLUDE REGEX "/core/rig/bridged?\\.cpp$")
 endif()
+# The radio service this build speaks (data2g/config.py PROFILE): hf, or fm (draft).
+# Another profile's tables (profiles/<p>/generated/, the files that differ from
+# HF's) replace core/generated/'s same-named sources, and its headers are found
+# first. Python picks the same with DATA2G_PROFILE.
+set(DATA2G_PROFILE "hf" CACHE STRING "Radio service profile (hf/fm)")
+set_property(CACHE DATA2G_PROFILE PROPERTY STRINGS hf fm)
+if(NOT DATA2G_PROFILE STREQUAL "hf")
+  set(_profile_dir "${CMAKE_CURRENT_SOURCE_DIR}/profiles/${DATA2G_PROFILE}")
+  if(NOT EXISTS "${_profile_dir}/generated/config.hpp")
+    message(FATAL_ERROR "DATA2G_PROFILE=${DATA2G_PROFILE}: no ${_profile_dir}/generated (tools/gen_native_tables.py)")
+  endif()
+  file(GLOB _profile_sources CONFIGURE_DEPENDS "${_profile_dir}/generated/*.cpp")
+  foreach(_src ${_profile_sources})
+    get_filename_component(_name "${_src}" NAME)
+    list(FILTER DATA2G_CORE_SOURCES EXCLUDE REGEX "/core/generated/${_name}$")
+  endforeach()
+  list(APPEND DATA2G_CORE_SOURCES ${_profile_sources})
+endif()
 add_library(data2g_core STATIC ${DATA2G_CORE_SOURCES})
+if(NOT DATA2G_PROFILE STREQUAL "hf")
+  target_include_directories(data2g_core BEFORE PUBLIC "${_profile_dir}")
+endif()
 target_include_directories(data2g_core PUBLIC core)
 # The release version (tools/bump_version.sh): the host's VERSION reply and the About box,
 # the same number as the .exe's version block and the macOS bundle's.
@@ -199,6 +220,10 @@ endif()
 # data2g-replay: a recording's receive audio through the engine, offline, for timing the receive path.
 add_executable(data2g-replay apps/data2g_replay.cpp)
 target_link_libraries(data2g-replay PRIVATE data2g_core data2g_applog)
+
+# data2g-bench-turn: two engines in real time over AWGN, the receiving station's turnaround on the air.
+add_executable(data2g-bench-turn apps/data2g_bench_turn.cpp)
+target_link_libraries(data2g-bench-turn PRIVATE data2g_core)
 
 # data2g-bench-rx: a burst's decode latency by stage (receive, soft bits, prepare, decodes), offline.
 add_executable(data2g-bench-rx apps/data2g_bench_rx.cpp)
@@ -338,12 +363,35 @@ endif()
 # Last, so it sees the apps however they were added. The GUI target is
 # expected to be called data2g-gui.
 set(DATA2G_PACKAGING_DIR "${CMAKE_CURRENT_SOURCE_DIR}/packaging")
+# Another profile's user-facing programs carry its name (data2g-host-fm, data2g-gui-fm,
+# data2g-web-fm), so one package can hold both profiles' (tools/package_app.sh).
+if(DATA2G_PROFILE STREQUAL "hf")
+  set(DATA2G_EXE_SUFFIX "")
+  set(DATA2G_PRODUCT "Data2G")
+  set(DATA2G_DESCRIPTION "Data2G HF data modem")
+  set(DATA2G_BUNDLE_ID "org.cleverdomain.data2g")
+else()
+  set(DATA2G_EXE_SUFFIX "-${DATA2G_PROFILE}")
+  string(TOUPPER "${DATA2G_PROFILE}" _profile_uc)
+  set(DATA2G_PRODUCT "Data2G ${_profile_uc}")
+  set(DATA2G_DESCRIPTION "Data2G ${_profile_uc} data modem")
+  set(DATA2G_BUNDLE_ID "org.cleverdomain.data2g.${DATA2G_PROFILE}")
+  foreach(app data2g-host data2g-gui data2g-web)
+    if(TARGET ${app})
+      set_target_properties(${app} PROPERTIES OUTPUT_NAME ${app}${DATA2G_EXE_SUFFIX})
+    endif()
+  endforeach()
+endif()
 foreach(app data2g-host data2g-gui data2g-web data2g-monitor)
   if(NOT TARGET ${app})
     continue()
   endif()
   if(WIN32)
-    set(DATA2G_RC_NAME ${app})
+    if(app STREQUAL "data2g-monitor")
+      set(DATA2G_RC_NAME ${app})
+    else()
+      set(DATA2G_RC_NAME ${app}${DATA2G_EXE_SUFFIX})
+    endif()
     configure_file(packaging/data2g.rc.in ${CMAKE_BINARY_DIR}/${app}.rc @ONLY)
     target_sources(${app} PRIVATE ${CMAKE_BINARY_DIR}/${app}.rc)
   endif()
@@ -354,8 +402,8 @@ if(TARGET data2g-gui AND APPLE)
   set_target_properties(data2g-gui PROPERTIES
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MacOSXBundleInfo.plist.in
-    MACOSX_BUNDLE_GUI_IDENTIFIER org.cleverdomain.data2g
-    MACOSX_BUNDLE_BUNDLE_NAME Data2G
+    MACOSX_BUNDLE_GUI_IDENTIFIER ${DATA2G_BUNDLE_ID}
+    MACOSX_BUNDLE_BUNDLE_NAME "${DATA2G_PRODUCT}"
     MACOSX_BUNDLE_ICON_FILE data2g.icns
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})

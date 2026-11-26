@@ -107,6 +107,9 @@ def substitutions(native):
         def observe(self, measured, submode, now):
             self._n.observe(measured, submode, float(now))
 
+        def update_measured(self, measured):
+            self._n.update_measured(measured)
+
         def observe_energy(self, snr_db, now):
             if snr_db is not None:
                 self._n.observe_energy(float(snr_db), float(now))
@@ -124,6 +127,9 @@ def substitutions(native):
         def recommend(self, station):
             return self._n.recommend(station)
 
+        def gap(self, st):
+            return self._n.gap(st)
+
         def payload_bytes(self, m):
             return A.payload_bytes(m)
 
@@ -136,8 +142,8 @@ def substitutions(native):
         def rv_cycle(self, m):
             return A.rv_cycle(m)
 
-        def connect_mode(self, cap, tries=0):
-            return A.connect_mode(cap, tries)
+        def connect_mode(self, cap, tries=0, last=False):
+            return A.connect_mode(cap, tries, last)
 
         def reply_hold(self, station, burst):
             return self._n.reply_hold(station, burst.submode)

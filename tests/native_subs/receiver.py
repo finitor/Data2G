@@ -78,18 +78,6 @@ def substitutions(native):
         channel_busy = property(lambda s: PyReceiver.channel_busy.fget(s) if s._n is None else s._n.channel_busy)
         n_expected = property(lambda s: PyReceiver.n_expected.fget(s) if s._n is None else s._n.n_expected)
         on_air = property(lambda s: PyReceiver.on_air.fget(s) if s._n is None else s._n.on_air)
-        data2g_on_air = property(lambda s: PyReceiver.data2g_on_air.fget(s) if s._n is None else s._n.data2g_on_air)
-
-        @property
-        def sense(self):
-            return self.__dict__.get("_sense_on", False) if self._n is None else self._n.sense
-
-        @sense.setter
-        def sense(self, v):
-            if self.__dict__.get("_n") is None:
-                self.__dict__["_sense_on"] = v
-            else:
-                self._n.sense = v
 
     def receive_any(y, lead=0, cpm_grids=None):
         if not same_config():

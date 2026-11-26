@@ -5,6 +5,7 @@ scripts/linksim.py sweep, not these)."""
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from data2g.arq import policy as G
 from data2g.arq import predictor as P
@@ -13,13 +14,18 @@ from data2g.config import SUBMODES
 
 
 def test_recommend_roundtrip_every_submode():
-    for name in MODES:
+    from data2g.arq.modes import SELECTABLE
+
+    for name in SELECTABLE:  # what the ARQ may name on air (every mode on HF)
         assert G.decode(G.encode(name)) == name
 
 
 def test_500hz_cap_only_narrow_modes():
     assert all(G.width_hz(s) <= 500 for s in G.allowed(0))
-    assert {s.band for s in G.allowed(0)} == {"n10", "n4", "c16r25", "c8r50"}
+    from data2g import config
+
+    # FM: n10 alone (no n4, no CPM: plan Q2)
+    assert {s.band for s in G.allowed(0)} == ({"n10"} if config.PROFILE == "fm" else {"n10", "n4", "c16r25", "c8r50"})
     assert G.FALLBACK[0] in {s.name for s in G.allowed(0)} and G.CONNECT[0] in {s.name for s in G.allowed(0)}
 
 
@@ -38,6 +44,7 @@ def joint(measured_, band, seconds=6.0):
     return {k: pb * pc for k, (pb, pc) in P.predict_outcome(measured_, band, 2.5, seconds).items()}
 
 
+@pytest.mark.hf_only("HF's outcome model (FM predicts from thresholds, M6)")
 def test_predictor_monotone_in_snr_and_rate():
     lo, hi = joint(measured(-2, 0.05), "w"), joint(measured(12, 0.05), "w")
     for name in ("qpsk-r1/2", "16qam-r1/2", "w48-16qam-r2/3"):
@@ -64,6 +71,7 @@ def test_chat_trades_rate_for_latency():
     assert p[out[True][0]] >= p[out[False][0]] - 0.02
 
 
+@pytest.mark.hf_only("the HF outcome model and gear shifter on an HF recording's measurements; FM's are M6's")
 def test_chat_bulk_queue_goes_for_goodput():
     """CHAT ON with more queued than one burst carries (a file): codewords a
     burst loses are resent, so not every one need decode. At the 20 dB a
@@ -190,6 +198,60 @@ def test_cpm_cap_reply_hold_and_link_lost_price():
     assert robust >= burst_seconds(G.MODES[G.ROBUST_CONNECT], 1)  # its 5 s answer is not polled over
 
 
+def test_weak_path_reads_the_burst_s_own_spread():
+    """weak_path() takes the last burst's own spread reading, not the one
+    observe() carries in from an earlier burst when it reports unmeasured:
+    while dialing the earlier one can be QRM, and its 9 Hz carried into a
+    good CONNECT_ACK started a good path at the robust floor. Unmeasured
+    is not fast (the SNR decides); a fast reading of its own is."""
+    g = G.GearShifter()
+    assert g.weak_path()  # nothing measured
+    g.observe(measured(-2.0, 9.0), G.ROBUST_CONNECT, 1.0)  # QRM heard while dialing
+    assert g.weak_path()
+    g.observe(measured(5.0, G.UNMEASURED_SPREAD_HZ), G.ROBUST_CONNECT, 6.0)  # the ACK: good, spread unmeasured
+    assert g.measured["spread_est"] == 9.0 and g.heard_spread is None  # carried for the predictor, not for this
+    assert not g.weak_path()
+    g.observe(measured(-9.0, G.UNMEASURED_SPREAD_HZ), G.ROBUST_CONNECT, 11.0)
+    assert g.weak_path()  # weak by its SNR
+    g.observe(measured(5.0, 12.0), G.ROBUST_CONNECT, 16.0)
+    assert g.heard_spread == 12.0 and g.weak_path()  # fast, by its own reading
+    g.observe(measured(5.0, 1.0), G.ROBUST_CONNECT, 21.0)
+    assert not g.weak_path()
+
+
+@pytest.mark.hf_only("names HF's CPM modes and their thresholds")
+def test_a_robust_start_bounds_the_first_data_request():
+    """A session started at the robust floor has one reading, the
+    CONNECT_ACK's, and from it at -13.8 dB the model asks for fsk32r62-r1/2
+    (steady-channel threshold -8 dB): the burst was lost and with it 9 of 16
+    sessions at AWGN -15 dB. Until a data burst of the peer's is usable the
+    request stays within ROBUST_START_DATA_MARGIN_DB of the reading and asks
+    for the control twice; a reading the model's pick already fits is left
+    alone. A session not started there asks as before."""
+    def first(snr, started):
+        g = G.GearShifter()
+        g.observe(measured(snr, 0.0), G.ROBUST_CONNECT, 1.0)
+        if started:
+            g.robust_started()
+        return g, G.decode(g.recommend(station(2))[0])
+
+    assert first(-13.8, False)[1] == "fsk32r62-r1/2"
+    g, mode = first(-13.8, True)
+    assert mode.startswith("fsk16r25") and g.want_dup
+    assert G.MODE_THRESHOLDS[mode][0] <= -13.8 + G.ROBUST_START_DATA_MARGIN_DB
+    assert first(-12.0, True)[1].startswith("fsk8r50")  # the margin moves with the reading
+    assert first(-9.0, True)[1] == first(-9.0, False)[1] == "fsk32r62-r1/2"
+    g.outcome(mode, 0, 1, usable=False)  # a data burst lost: still bounded
+    assert g.start_bound and G.decode(g.recommend(station(2))[0]).startswith("fsk16r25")
+    g.outcome(mode, 1, 1, usable=True)  # one usable: the model's own from here
+    assert not g.start_bound
+    g.observe(measured(-22.0, 0.0), G.ROBUST_CONNECT, 9.0)  # under every threshold: the most robust there is
+    g.robust_started()
+    mode = G.decode(g.recommend(station(2))[0])
+    assert G.MODE_THRESHOLDS[mode][0] == min(G.MODE_THRESHOLDS[s.name][0] for s in G.allowed(2) if P.outcome_knows(s.name))
+
+
+@pytest.mark.hf_only("names HF's n4 and CPM modes (FM has neither, plan Q2)")
 def test_robust_floor_sends_control_only_bursts_robust():
     g = G.GearShifter()
     st = station(2)
@@ -201,8 +263,13 @@ def test_robust_floor_sends_control_only_bursts_robust():
     st.tx = SimpleNamespace(pending=lambda: True, base=0)
     st.peer_recommend = G.encode("fsk32r62-r1/2")
     assert g.choose(st, 0)[0] == "fsk32r62-r1/2"  # data still follows the recommendation
+    st.peer_recommend = None  # ... once there is one: until then control only, in the robust mode
+    assert g.choose(st, 0) == (G.ROBUST_CONNECT, 1)
+    st.esc_floor = 0
+    assert g.choose(st, 0) == (G.FALLBACK[2], 2)
 
 
+@pytest.mark.hf_only("HF's ladder thresholds (FM's are provisional, M6)")
 def test_lost_data_steps_down_the_ladder():
     """LADDER_AFTER data bursts lost in a row in the mode I recommended: data
     goes only in modes LADDER_STEP_DB more robust on every channel; a further
@@ -352,3 +419,50 @@ def test_robust_mode_follows_measured_spread():
 
     hold = g.reply_hold(SimpleNamespace(cap=0, misses=0, esc_floor=0), SimpleNamespace(submode=G.ROBUST_FAST))
     assert hold >= max(burst_seconds(G.MODES[m], 1) for m in G.ROBUST_MODES)
+
+
+@pytest.mark.hf_only("an HF channel (mpp) against the HF predictor's training rows")
+def test_live_gap_is_the_training_rows_gap():
+    """The shifter's gap input live (GearShifter.gap) against the one its
+    training rows get (scripts/session_data.py: t0 - snap["t"], from the
+    measured peer burst to the start of the burst predicted), in a 120 s
+    session on the real modem, MPP 0 dB. Live it is an estimate: my burst's
+    end plus a reply's start. It is never late; a reply is within ~0.1 s
+    (a control spilling into a second codeword: ~0.5 s); a poll after a
+    timeout or a held reply starts later than estimated."""
+    import random
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    import linksim as L
+    import outcome_data as O
+    import phy_session as PS
+    import session_data as SD
+
+    pairs = []
+
+    class Shifter(SD.Explorer):
+        def recommend(self, station):
+            out = super().recommend(station)
+            if self.measured is not None:
+                self.snap["live"] = self.gap(G.view(station))
+            return out
+
+    class Phy(SD.DataPhy):
+        def send(self, burst, t0):
+            snap, n = self.pols[1 - burst.slots[0].mask_id[1]].snap, len(self.out)
+            res = super().send(burst, t0)
+            if len(self.out) > n:  # a training row
+                pairs.append(self.out[-1]["gap"] - snap["live"])
+            return res
+
+    seed, snr, horizon = 1, 0.0, 120.0
+    doppler, delay = L.PRESETS["mpp"]
+    pols = [Shifter(random.Random(seed * 2 + i)) for i in range(2)]
+    ch = PS.ContinuousChannel(O.family(doppler), snr, seed, horizon + 60, doppler=doppler, delay_ms=delay)
+    L.run(pols[0], pols[1], None, L.WORKLOADS["bulk"](random.Random(seed + 7)), seed=seed, horizon=horizon,
+          phy=Phy(ch, dict(seed=seed), pols, snr, 0.0, []), cap=2)
+    d = np.array(pairs)
+    assert len(d) >= 15
+    assert d.min() >= -0.1 and np.median(np.abs(d)) <= 0.1 and np.mean(np.abs(d) <= 0.6) >= 0.8, np.round(d, 2)

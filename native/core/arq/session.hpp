@@ -22,9 +22,11 @@
 namespace data2g::arq {
 
 inline constexpr int VERSION = 5;  // session.py VERSION: 4 added T_INLINE, 5 the CW ID ahead of a turn
-inline constexpr int CONNECT_TRIES = 5;
+inline constexpr int CONNECT_TRIES = 6;  // session.py: the last in ROBUST_FAST
 inline constexpr int CONNECT_CTL_BYTES = 4 + 2 + Connect::BYTES;  // a CONNECT's Control: core, T_SESS header, body
 inline constexpr int DISC_TRIES = 3;
+// DISC tries stop within this of the first one keyed: BPQ32's ABORT comes 30 s after its DISCONNECT (session.py)
+inline constexpr double DISC_BUDGET_S = 29.0;
 inline constexpr double REPLY_START_S = 2.5;  // data2g/arq/session.py
 inline constexpr double REPEAT_GAP_S = 30.0;  // failed connect frames further apart are not one CONNECT's tries
 inline constexpr double IDLE_CLOSE_S = 300.0;
@@ -77,7 +79,7 @@ std::string frame_desc(ByteView body);
 // when it makes a Session (session.py reads them at each use).
 struct SessionTuning {
     int connect_tries = CONNECT_TRIES, disc_tries = DISC_TRIES;
-    double reply_start_s = REPLY_START_S, idle_close_s = IDLE_CLOSE_S;
+    double reply_start_s = REPLY_START_S, idle_close_s = IDLE_CLOSE_S, disc_budget_s = DISC_BUDGET_S;
     double keepalive_lo_s = KEEPALIVE_LO_S, keepalive_hi_s = KEEPALIVE_HI_S;
     double chat_keepalive_lo_s = CHAT_KEEPALIVE_LO_S, chat_keepalive_hi_s = CHAT_KEEPALIVE_HI_S;
     bool keepalive_doubling = KEEPALIVE_DOUBLING;
@@ -95,6 +97,7 @@ public:
     std::string call;
     std::shared_ptr<Policy> policy;
     double t_turn;
+    std::optional<double> peer_t_turn;  // from its CONNECT or CONNECT_ACK: how long it takes to reply
     std::shared_ptr<Rng> rng;
     SessionState state = SessionState::IDLE;
     std::string peer;
@@ -114,8 +117,12 @@ public:
     TxBurstPtr out;
     TxBurstPtr nak;  // a refusal in out: not the session's burst (no reply timer, no wake)
     std::string tx_mode;  // the mode of my last burst sent (expecting)
+    std::string rx_mode;  // the mode of the peer's last burst my link took (session_mode)
+    std::optional<std::string> disc_mode;  // every try of this DISC goes in it; none: the policy's connect_mode
     // The modes my peer's next burst likely comes in while one is due (session.py's expecting, §3a).
     std::vector<std::string> expecting() const;
+    // The peer's turnaround my reply timers allow: its advertised t_turn in a session, else mine (session.py).
+    double peer_turn() const;
     std::optional<double> due, deadline, build_at;
     std::optional<double> coalesce_until;  // write(): an idle poll or wake held for more data
     std::optional<std::string> answer_mode;
@@ -124,6 +131,9 @@ public:
     double quiet_from = 0, wake_wait = 0;
     int wakes = 0;
     bool want_disc = false, sent_disc_ack = false;
+    double disc_from = 0;    // when the first try of this DISC was keyed (disc_budget_s)
+    bool disc_last = false;  // the DISC on air is the last try: no retry follows it
+    bool disc_retry_fits(double end, double ack, const TxBurst& burst) const;
     std::string disc_why = "CLIENT";  // who wanted the DISC: CLIENT or IDLE
     Bytes pending_write;
     double now_ = 0, stats_since = 0, connected_at = 0;
@@ -176,6 +186,8 @@ public:
 protected:
     // A binding makes its own Station subclass here.
     virtual std::shared_ptr<Station> make_station(int direction, bool master, int key);
+    void robust_start(const std::string& mode);  // session._robust_start
+    bool follow_start = false;  // the callee: take the robust floor if the caller's first burst is robust
 
 private:
     struct Frame {
@@ -191,6 +203,7 @@ private:
     TxBurstPtr session_burst(int direction, int key, const Bytes& body, std::optional<std::string> mode = std::nullopt);
     TxBurstPtr connect_burst();
     TxBurstPtr disc_burst();
+    std::optional<std::string> session_mode() const;
     TxBurstPtr accept_burst();
     void refuse(const Connect& c, const std::string& mode, int reason, double now);
     bool compact(const std::string& mode);  // a CONNECT in `mode` goes compact (frames pack_connect)
@@ -200,6 +213,7 @@ private:
     std::optional<Frame> repeated_frame(RxBurst& rx, double now);  // one that failed, combined with the failed ones before it
     double repeat_at = -1e300;  // the last failed connect frame kept for combining
     void on_session_frame(const Frame& f, double now);
+    void refine_measured(RxBurst& rx);
     void flush_writes();
 };
 

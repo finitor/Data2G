@@ -13,7 +13,7 @@ class FixedMode(G.GearShifter):
         super().__init__()
         self.mode = mode
 
-    def connect_mode(self, cap, tries=0):
+    def connect_mode(self, cap, tries=0, last=False):
         return self.mode
 
     def choose(self, station, escalation):
@@ -119,25 +119,67 @@ def test_late_ofdm_ack_finishes_before_retry(session_type, by):
     lost_ack(session_type, "qpsk-r1/5", by, ack_delay=1.0)
 
 
-@pytest.mark.parametrize("mode", (G.ROBUST_CONNECT, G.ROBUST_FAST))
-@pytest.mark.parametrize("by", (0, 1))
-def test_absent_disc_replies_still_exhaust_the_same_retry_budget(session_type, mode, by):
-    sessions = pair(session_type, mode)
-    src, now = sessions[by], sessions[2]
+def absent_replies(src, now):
+    """No reply to any DISC try. -> (first try keyed, close time, tries sent,
+    the last try's start and end)."""
     src.disconnect()
     start, burst = ready(src, now)
-    for attempt in range(S.DISC_TRIES):
+    first, tries = start, 0
+    while burst is not None:
+        tries += 1
         end = start + src.policy.airtime(burst.submode, len(burst.slots))
         src.on_tx_end(burst, end)
         deadline = src.next_event()
-        assert end < deadline <= end + src.t_turn + S.REPLY_START_S + src.policy.airtime(burst.submode, len(burst.slots))
+        hold = src.policy.airtime(burst.submode, len(burst.slots))
+        assert end < deadline <= end + src.t_turn + S.REPLY_START_S + hold + .001
         burst = src.poll(deadline)
-        if attempt + 1 < S.DISC_TRIES:
-            assert burst is not None and src.state == S.DISCONNECTING
+        if burst is not None:
+            assert src.state == S.DISCONNECTING
             start = deadline
-        else:
-            assert burst is None and src.state == S.CLOSED
-            assert src.close_reason == "CLIENT unconfirmed"
+    assert src.state == S.CLOSED and src.close_reason == "CLIENT unconfirmed"
+    return first, deadline, tries, start, end
+
+
+@pytest.mark.parametrize("mode", (G.ROBUST_CONNECT, G.ROBUST_FAST, "qpsk-r1/5"))
+@pytest.mark.parametrize("by", (0, 1))
+def test_absent_disc_replies_close_within_the_budget(session_type, mode, by):
+    """Unanswered, the DISC tries end within DISC_BUDGET_S of the first
+    (BPQ32 sends ABORT 30 s after its DISCONNECT, #215), and a try is given
+    up only when it would not fit: after the last reply window, the hold for
+    the ACK, the retry's airtime and its own reply window overrun the budget.
+    The counts depend on the profile's mode lengths (HF: below)."""
+    sessions = pair(session_type, mode)
+    src = sessions[by]
+    first, closed, tries, last_start, last_end = absent_replies(src, sessions[2])
+    assert closed - first <= S.DISC_BUDGET_S
+    if tries < S.DISC_TRIES:
+        window = closed - last_end
+        air = last_end - last_start
+        assert closed + air + air + window > first + S.DISC_BUDGET_S
+
+
+@pytest.mark.hf_only("HF's mode lengths: ROBUST_CONNECT 4.98 s, ROBUST_FAST 3.62 s")
+@pytest.mark.parametrize("mode", (G.ROBUST_CONNECT, G.ROBUST_FAST, "qpsk-r1/5"))
+@pytest.mark.parametrize("by", (0, 1))
+def test_absent_disc_tries_per_mode(session_type, mode, by):
+    """At t_turn 1 s, a DISC whose every try is in ROBUST_CONNECT (4.98 s)
+    gets two (a third would end at 35.4 s); in ROBUST_FAST (3.62 s) or
+    qpsk-r1/5 all three."""
+    sessions = pair(session_type, mode)
+    tries = absent_replies(sessions[by], sessions[2])[2]
+    assert tries == (2 if mode == G.ROBUST_CONNECT else S.DISC_TRIES)
+
+
+@pytest.mark.parametrize("by", (0, 1))
+def test_the_default_disc_ladder_keeps_three_tries_within_the_budget(session_type, by):
+    """GearShifter's ladder (the cap's connect mode, then ROBUST_CONNECT):
+    all DISC_TRIES tries, the ACK waited out before each retry, inside the
+    budget (28.7 s at t_turn 1 s)."""
+    sessions = pair(session_type, "qpsk-r1/5")
+    src = sessions[by]
+    src.policy.connect_mode = lambda cap, tries=0, last=False: G.GearShifter.connect_mode(src.policy, cap, tries, last)
+    first, closed, tries, *_ = absent_replies(src, sessions[2])
+    assert tries == S.DISC_TRIES and closed - first <= S.DISC_BUDGET_S
 
 
 @pytest.mark.parametrize("mode", MODES)

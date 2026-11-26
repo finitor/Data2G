@@ -23,9 +23,8 @@ struct CpmGrid {
     double rate, center, bp, clip_db;
     int T, bits;
     // sync_threshold, mid_threshold: detect's floors (front, mid block); lock_llr1/2:
-    // find's and late_lock's tone_llr score floors, wait_llr: a waiting front's; mid_llr: find_mid's;
-    // presence_a, presence_b: cpm::present's floor a + b / sqrt(symbols) (cpm.PRESENCE).
-    double f0, sync_threshold, mid_threshold, lock_llr1, lock_llr2, wait_llr, mid_llr, presence_a, presence_b;
+    // find's and late_lock's tone_llr score floors, wait_llr: a waiting front's; mid_llr: find_mid's.
+    double f0, sync_threshold, mid_threshold, lock_llr1, lock_llr2, wait_llr, mid_llr;
     int hdr_len;
     std::span<const std::uint8_t> preamble, mid_block, header_tones;
     CpmTxFilter tx[3];

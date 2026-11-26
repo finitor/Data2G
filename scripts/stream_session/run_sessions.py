@@ -62,6 +62,13 @@ POINTS = [
     ("mpp+0", 1, 2, 0, False),
     ("mpg-4", 0.1, 0.5, -4, False),
     ("awgn-18", 0, 0, -18, False),
+    # the PEP-5 AWGN ladder's own steps (AWGN_PEP5 below)
+    ("awgn-6", 0, 0, -6, False),
+    ("awgn-10", 0, 0, -10, False),
+    ("awgn-13", 0, 0, -13, False),
+    ("awgn-19", 0, 0, -19, False),
+    ("awgn-20", 0, 0, -20, False),
+    ("awgn-21", 0, 0, -21, False),
     ("awgn-12+carrier", 0, 0, -12, True),
     ("cap500-mpd+0", 2, 4, 0, False, dict(cap=0)),
     ("cap500-mpp+0", 1, 2, 0, False, dict(cap=0)),
@@ -79,6 +86,14 @@ POINTS = [
     ("cfo25-poor", 1, 2, -8, False, dict(cfo=25.0)),
     ("drift-poor", 1, 2, -8, False, dict(cfo_rate=0.1)),
 ]
+
+# Named cell sets for --points. awgn-pep5: AWGN from clean to -21 dB for DATA2G_PEP_REF_DB=5. Below about
+# -10 dB the sessions run in constant-envelope FSK, which PEP-5 makes 5 dB easier than the mean-power
+# scale, so the floor moves from -15/-16 to -20/-21 (master 43b2968: mean-power -15/-16 and PEP-5 -20/-21
+# match seed for seed). Like the mean-power ladder, it steps 1 dB around the floor. Mean-power runs keep
+# the original cells.
+SETS = {"awgn-pep5": ["clean", "awgn+10", "awgn+0", "awgn-6", "awgn-10", "awgn-13", "awgn-16",
+                      "awgn-19", "awgn-20", "awgn-21"]}
 
 
 def read_exact(pipe, n):
@@ -186,9 +201,11 @@ def main():
     p.add_argument("--directory", type=Path, required=True)
     a = p.parse_args()
     a.directory.mkdir(parents=True, exist_ok=True)
+    points = [n for k in a.points.split(",") for n in SETS.get(k, [k])]
+    assert set(points) <= {p[0] for p in POINTS}, sorted(set(points) - {p[0] for p in POINTS})
     with (a.directory.parent/(a.directory.name+".jsonl")).open("a") as f:
         for point in POINTS:
-            if point[0] not in a.points.split(","):
+            if point[0] not in points:
                 continue
             for seed in range(a.seed, a.seed+a.trials):
                 for modem in a.modems.split(","):

@@ -148,12 +148,12 @@ def run(modem, point, seed, directory, horizon=180, nbytes=64):
         args = [sys.executable, str(HERE/"endpoint_data2g_native.py")]
     else:
         # Another modem speaking the same pipe protocol (args: seed, two payloads, cap): the 2026-11-23
-        # comparison adapters for Xara and Ion, whose binaries STREAM_SESSION_XARA and STREAM_SESSION_ION
+        # comparison adapters for Xara, Ion and Aether, whose binaries STREAM_SESSION_XARA, _ION and _AETHER
         # name. Under PEP-fair SNR a study-patched adapter is told to send every burst at peak 1.0
         # (<MODEM>_PEAK_FULL_SCALE); otherwise it sends at mean 0.01. It writes per-block CPU to <MODEM>_CPU.
         # Mercury: a bridge script (on the Mercury repo's study/stream-session-adapter branch) that runs two
         # `mercury -x sock` stations; STREAM_SESSION_MERCURY names it, MERCURY_BIN the binary it starts.
-        assert modem in ("xara", "ion", "mercury"), modem
+        assert modem in ("xara", "ion", "aether", "mercury"), modem
         exe = os.environ[f"STREAM_SESSION_{modem.upper()}"]
         args = [sys.executable, exe] if exe.endswith(".py") else [exe]
         key = f"{modem.upper()}_PEAK_FULL_SCALE"

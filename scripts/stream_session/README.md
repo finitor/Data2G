@@ -56,7 +56,7 @@ SNR is in 2500 Hz, on one of two scales, chosen by `DATA2G_PEP_REF_DB` (recorded
 | The robust-start gate study's grid | `awgn+10`, `+5`, `+0`, `-4`, `-8`; `mpp+2`, `-2`, `-6`, `-10`; `nvis-10` |
 | `fast-fading-integration`'s smoke cells, at this SNR | `hilat+10`, `hilat-m+10`, `hilat-m+20` (10, 3), `lowlat-d+10` (10, 6), `nvis+10`, `mpd+0` (2, 4), `mpp+0`, `mpg-4` (0.1, 0.5), `awgn-18`, `awgn-12+carrier`; 500 Hz cap: `cap500-mpd+0`, `cap500-mpp+0`, `cap500-awgn-12` |
 | Interference (`data2g.interference` presets, on 1 Hz / 2 ms at +2 dB) | `imp`, `imp-long`, `qrm-fsk` (`mid`), `qrm-edge`, `qrm-carriers`, `qrm-wide` |
-| The PEP-5 AWGN ladder (`--points awgn-pep5`, `run_sessions.SETS`) | `clean`, `awgn+10`, `+0`, `-6`, `-10`, `-13`, `-16`, `-19`, `-20`, `-21`: clean to the floor, 1 dB steps at the bottom. Below about −10 dB sessions run in constant-envelope FSK, which PEP-5 makes 5 dB easier, so the failure floor sits about 5 dB lower than on the mean-power scale |
+| The PEP-5 AWGN ladder (`--points awgn-pep5`, `run_sessions.SETS`) | `clean`, `awgn+10`, `+0`, `-6`, `-10`, `-12`, `-14`, `-16`, `-19`, `-20`, `-21`: clean to the floor, 1 dB steps at the bottom. Below about −10 dB sessions run in constant-envelope FSK, which PEP-5 makes 5 dB easier, so the failure floor sits about 5 dB lower than on the mean-power scale |
 | Clocks and tuning | `clock-awgn-12`, `clock-poor` (sample clocks 100 ppm apart), `cfo25-poor` (25 Hz offset), `drift-poor` (+0.1 Hz/s from 4.5 Hz) |
 
 The carriers (`carrier`, `awgn-12+carrier`): a 1573.4 Hz tone, +12 dB over

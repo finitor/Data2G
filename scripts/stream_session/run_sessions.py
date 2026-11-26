@@ -65,7 +65,6 @@ POINTS = [
     # the PEP-5 AWGN ladder's own steps (AWGN_PEP5 below)
     ("awgn-6", 0, 0, -6, False),
     ("awgn-10", 0, 0, -10, False),
-    ("awgn-13", 0, 0, -13, False),
     ("awgn-19", 0, 0, -19, False),
     ("awgn-20", 0, 0, -20, False),
     ("awgn-21", 0, 0, -21, False),
@@ -87,13 +86,13 @@ POINTS = [
     ("drift-poor", 1, 2, -8, False, dict(cfo_rate=0.1)),
 ]
 
-# Named cell sets for --points. awgn-pep5: AWGN from clean to -21 dB for DATA2G_PEP_REF_DB=5. Below about
+# Named cell sets for --points. awgn-pep5: AWGN from clean to -21 dB in 11 cells for DATA2G_PEP_REF_DB=5. Below about
 # -10 dB the sessions run in constant-envelope FSK, which PEP-5 makes 5 dB easier than the mean-power
 # scale, so the floor moves from -15/-16 to -20/-21 (master 43b2968: mean-power -15/-16 and PEP-5 -20/-21
 # match seed for seed). Like the mean-power ladder, it steps 1 dB around the floor. Mean-power runs keep
 # the original cells.
-SETS = {"awgn-pep5": ["clean", "awgn+10", "awgn+0", "awgn-6", "awgn-10", "awgn-13", "awgn-16",
-                      "awgn-19", "awgn-20", "awgn-21"]}
+SETS = {"awgn-pep5": ["clean", "awgn+10", "awgn+0", "awgn-6", "awgn-10", "awgn-12", "awgn-14",
+                      "awgn-16", "awgn-19", "awgn-20", "awgn-21"]}
 
 
 def read_exact(pipe, n):

@@ -261,6 +261,10 @@ def test_stream_detector(native, py, name):
             assert abs(c.level() - a.level()) <= SUM_TOL * a.level()
             lo = a.s0 - 50
             close(c.stat(lo, fed), a.stat(lo, fed), SUM_TOL)
+            assert c.peak(lo, fed) == c.stat(lo, fed).max()  # the receiver's quiet gate is acquire's own test
+            assert c.peak(fed - 900, fed - 300) == c.stat(fed - 900, fed - 300).max()
+        else:
+            assert c.peak(c.s0, fed) == -1.0
         if k % 3 == 1:  # the pair products, extended as asked for (find_copy)
             pa, Da = a.products_from(a.c0 + 11, config.FRAME_SAMPLES, 3)
             pc, Dc = c.products_from(c.c0 + 11, config.FRAME_SAMPLES, 3)

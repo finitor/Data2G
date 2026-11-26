@@ -57,7 +57,9 @@ SUSTAINED = False
 # --cands: every candidate one of these modes (a supplement for modes added
 # to an installed model: train_outcome.py --extend), SNR across their range
 ONLY: tuple = ()
-KINDS = (("awgn", 0.15), ("mpg", 0.2), ("mpp", 0.2), ("mpd", 0.15), ("random", 0.3))
+# channel kinds and their relative weights (normalised where drawn); mpa/mpl
+# are the on-air presets (hfchannel), 0.1 each so the pair weighs one preset
+KINDS = (("awgn", 0.15), ("mpg", 0.2), ("mpp", 0.2), ("mpd", 0.15), ("mpa", 0.1), ("mpl", 0.1), ("random", 0.3))
 THRESHOLDS = I.thresholds()
 # CPM modes' 1% end-to-end points (the CPM prototype's study, 1% v2), for
 # choosing modes near their working range only
@@ -125,11 +127,12 @@ def model_pick(cap, prev, prev_name, t_prev, cur, cur_name, t_cur) -> str:
 
 def sample(seed):
     rng = np.random.default_rng(seed)
-    kind = str(rng.choice([k for k, _ in KINDS], p=[w for _, w in KINDS]))
+    ws = np.array([w for _, w in KINDS])
+    kind = str(rng.choice([k for k, _ in KINDS], p=ws / ws.sum()))
     if kind == "random":
         doppler, delay = float(np.exp(rng.uniform(np.log(0.05), np.log(3.0)))), float(rng.uniform(0, 5))
     else:
-        doppler, delay = PS.L.PRESETS[kind]
+        doppler, delay = PS.PRESETS[kind]
     fam = family(doppler)
     # ~1% outside the realistic range, so nothing is wholly out of
     # distribution (a lossless loopback measured 20-33 dB)

@@ -159,6 +159,7 @@ void bind_waveform(py::module_& m) {
         .def("trim", &SD::trim)
         .def("level", &SD::level)
         .def("stat", [](const SD& d, std::int64_t lo, std::int64_t hi) { return np_move(d.stat(lo, hi)); })
+        .def("peak", &SD::peak)
         .def_property_readonly("band_name", [](const SD& d) { return std::string(d.band.spec->name); })
         .def_readonly("reach", &SD::reach)
         .def_readonly("span", &SD::span)

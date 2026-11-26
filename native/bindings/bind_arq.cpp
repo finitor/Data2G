@@ -52,6 +52,7 @@ arq::StationView station(const py::object& s) {
         v.misses = s.attr("misses").cast<int>();
         v.esc_floor = s.attr("esc_floor").cast<int>();
         v.last_rx_data = s.attr("last_rx_data").cast<bool>();
+        v.tx_end = s.attr("tx_end").cast<std::optional<double>>();
         return v;
     }
     v.cap = s.attr("cap").cast<int>();
@@ -67,6 +68,7 @@ arq::StationView station(const py::object& s) {
     v.misses = attr(s, "misses", 0);
     v.esc_floor = attr(s, "esc_floor", 0);
     v.last_rx_data = py::bool_(attr<py::object>(s, "last_rx_data", py::bool_(true)));
+    v.tx_end = attr<std::optional<double>>(s, "tx_end", std::nullopt);
     return v;
 }
 
@@ -113,6 +115,7 @@ void bind_arq(py::module_& m) {
         for (py::ssize_t i = 0; i < snr_db.size(); ++i) out.mutable_data()[i] = arq::capacity(snr_db.data()[i], c);
         return out;
     });
+    a.def("inv_capacity", [](double mi, const std::string& c) { return arq::inv_capacity(mi, c); });
     a.def("effective_mi", [](const In<std::complex<double>>& h, const In<double>& var, const std::string& c) {
         return arq::effective_mi({h.data(), static_cast<std::size_t>(h.size())},
                                  {var.data(), static_cast<std::size_t>(var.size())}, c);
@@ -139,7 +142,9 @@ void bind_arq(py::module_& m) {
         const auto out = arq::predict_outcome(measured(md), band, gap, seconds, pv ? &*pv : nullptr, model);
         py::dict d;
         for (std::size_t i = 0; i < out.size(); ++i)
-            d[py::str(std::string(tables::OUTCOME_MODES[i]))] = py::make_tuple(out[i].burst, out[i].cw);
+            // FM: the provisional threshold predictor's rows are MODE_THRESHOLDS' (predictor.cpp)
+            d[py::str(std::string(config::PROFILE == "fm" ? tables::MODE_THRESHOLDS[i].name : tables::OUTCOME_MODES[i]))] =
+                py::make_tuple(out[i].burst, out[i].cw);
         return d;
     }, py::arg("measured"), py::arg("band"), py::arg("gap"), py::arg("seconds"), py::arg("prev") = py::none(),
        py::arg("model") = 0);
@@ -156,8 +161,8 @@ void bind_arq(py::module_& m) {
     a.def("shifted", [](const py::dict& m, double shift) { return to_dict(arq::shifted(measured(m), shift)); });
     a.def("cap_hz", &arq::cap_hz);
     a.def("fallback", [](int cap) { return std::string(arq::fallback(cap)); });
-    a.def("connect_mode", [](int cap, int tries) { return std::string(arq::connect_mode(cap, tries)); },
-          py::arg("cap"), py::arg("tries") = 0);
+    a.def("connect_mode", [](int cap, int tries, bool last) { return std::string(arq::connect_mode(cap, tries, last)); },
+          py::arg("cap"), py::arg("tries") = 0, py::arg("last") = false);
     a.def("width_hz", [](const std::string& n) { return arq::width_hz(amode(n)); });
     a.def("allowed", [](int cap) {
         std::vector<std::string> out;
@@ -190,8 +195,11 @@ void bind_arq(py::module_& m) {
         .def_readwrite("data_lost", &Shifter::data_lost)
         .def_readwrite("ladder_left", &Shifter::ladder_left)
         .def_readwrite("spreads", &Shifter::spreads)
+        .def_readwrite("n0_spreads", &Shifter::n0_spreads)
         .def_readwrite("floor_spreads", &Shifter::floor_spreads)
         .def_readwrite("last_spread", &Shifter::last_spread)
+        .def_readwrite("heard_spread", &Shifter::heard_spread)
+        .def_readwrite("start_bound", &Shifter::start_bound)
         .def_readwrite("energies", &Shifter::energies)
         .def_readwrite("snrs", &Shifter::snrs)
         .def("cpm_floor", &Shifter::cpm_floor)
@@ -248,10 +256,14 @@ void bind_arq(py::module_& m) {
         .def("observe", [](Shifter& s, const py::dict& md, const std::string& submode, double now) {
             s.observe(measured(md), submode, now);
         })
+        .def("update_measured", [](Shifter& s, const py::dict& md) { s.update_measured(measured(md)); })
         .def("outcome", [](Shifter& s, const std::string& submode, int decoded, int sent, std::optional<bool> usable) {
             s.outcome(submode, decoded, sent, usable);
         }, py::arg("submode"), py::arg("decoded"), py::arg("sent"), py::arg("usable") = py::none())
         .def("gate", &Shifter::gate)
+        .def("weak_path", &Shifter::weak_path)
+        .def("robust_started", [](Shifter& s) { s.start_bound = true; })
+        .def("gap", [](const Shifter& s, const py::object& st) { return s.gap(station(st)); })
         .def("recommend", [](Shifter& s, const py::object& st) {
             const auto r = s.recommend(station(st));
             return py::make_tuple(r.data, r.hint, r.reply);

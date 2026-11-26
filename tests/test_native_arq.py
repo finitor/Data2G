@@ -143,10 +143,14 @@ def test_policy_helpers(A, pure):
     for cap in G.CAP_HZ:
         assert A.allowed(cap) == [s.name for s in G.allowed(cap)]
         assert (A.cap_hz(cap), A.fallback(cap)) == (G.CAP_HZ[cap], G.FALLBACK[cap])
-        assert [A.connect_mode(cap, t) for t in (0, 1, 2)] == [G.GearShifter().connect_mode(cap, t) for t in (0, 1, 2)]
+        for last in (False, True):
+            assert [A.connect_mode(cap, t, last) for t in range(8)] == [
+                G.GearShifter().connect_mode(cap, t, last=last) for t in range(8)]
     for rec in range(64):
         assert A.decode(rec) == G.decode(rec)
     for name, s in modes.MODES.items():
+        if name not in modes.SELECTABLE:  # FM: compiled, never named on air (no code)
+            continue
         assert (A.encode(name), A.width_hz(name), A.ctl_slots(name)) == (G.encode(name), G.width_hz(s), G.ctl_slots(s))
         for sec in (*G.SIZE_S, 0.1, 2.0, 30.0, 100.0):
             for data in (False, True):
@@ -178,6 +182,7 @@ def test_shifter_decisions_match(A, pure, seed):
     nat.gap_s, nat.use_cpm, nat.min_success = kw["gap_s"], kw["use_cpm"], kw["min_success"]
     cap, now, rec = seed % 3, 0.0, None
     assert nat.choose(station(rng, cap), 0) == ref.choose(station(rng, cap), 0)
+    assert nat.weak_path() and ref.weak_path()  # nothing measured
     for step in range(60):
         if rng.random() < 0.05:
             cap = rng.choice(list(G.CAP_HZ))
@@ -194,6 +199,11 @@ def test_shifter_decisions_match(A, pure, seed):
         now += rng.choice([1.0, 5.0, 12.0, 35.0])
         ref.observe(m, heard, now)
         nat.observe(m, heard, now)
+        assert nat.weak_path() == ref.weak_path()
+        if step == 0 and seed % 2:  # a session started at the robust floor: its first data request is bounded
+            ref.robust_started()
+            nat.robust_started()
+        assert nat.start_bound == ref.start_bound
         e = float(nrng.uniform(-12, 30))
         ref.observe_energy(e, now)
         nat.observe_energy(e, now)
@@ -201,6 +211,8 @@ def test_shifter_decisions_match(A, pure, seed):
         which = 0 if g is None else 1 if P.GATE and g is P.outcome_model(P.GATE[0]) else 2
         assert nat.gate() == which and nat.cpm_floor() == ref.cpm_floor()
         st = station(rng, cap)
+        st.tx_end = rng.choice([None, now + rng.uniform(0.5, 30.0)])  # the gap input: gap_s, or from the clock
+        assert nat.gap(st) == pytest.approx(ref.gap(st))
         want, got = ref.recommend(st), nat.recommend(st)
         assert got == want, (seed, step, [G.decode(r) for r in (want[0], want[2])], [A.decode(r) for r in (got[0], got[2])])
         assert nat.want_dup == ref.want_dup and nat.predicted.keys() == ref.predicted.keys()
@@ -225,11 +237,12 @@ def test_shifter_decisions_match(A, pure, seed):
 
 def test_native_shifter_state_roundtrips(A):
     g = A.GearShifter()
-    m = dict(snr_est=3.0, spread_est=0.5, delay_est_ms=1.0, headroom=0.0, frames=8.0,
+    m = dict(snr_est=3.0, spread_est=0.5, delay_est_ms=1.0, headroom=0.0, frames=8.0, n0_spread_db=0.0,
              **{f"mi_{c}": 0.5 for c in P.CONSTS})
     g.observe(m, "qpsk-r1/2", 1.0)
-    g.observe(m, "n4-qpsk-r1/3", 2.0)
-    assert g.measured == m and g.measured_band == "n4" and g.prev == (m, "w", 1.0)
+    narrow = "n10-qpsk-r1/3" if config.PROFILE == "fm" else "n4-qpsk-r1/3"  # FM has no n4
+    g.observe(m, narrow, 2.0)
+    assert g.measured == m and g.measured_band == narrow.split("-")[0] and g.prev == (m, "w", 1.0)
     g.predicted = {"ack-4f": (0.25, 0.5)}
     assert g.predicted == {"ack-4f": (0.25, 0.5)}
     g.log = [("ack-4f", 1, "ack-4f")]

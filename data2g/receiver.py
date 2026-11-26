@@ -43,7 +43,7 @@ from collections import deque  # noqa: E402
 import numpy as np  # noqa: E402
 
 from . import audio, modem  # noqa: E402
-from .config import BANDS, FS, SNR_REF_BW_HZ  # noqa: E402
+from .config import BANDS, DECODE_EARLY, FRAME_SAMPLES, FS, SNR_REF_BW_HZ, SPREAD_WINDOW  # noqa: E402
 from .waveform import dsp  # noqa: E402
 
 log = logging.getLogger("data2g.receiver")
@@ -176,7 +176,14 @@ class NoiseProfile:
     times the block's median 10 ms RMS (on air, recordings 2026-09/10:
     impulses ~22 dB over the noise, 1-3 ms, clustered; Gaussian peaks over
     80 samples stay under 5x). Counted on the raw input, before the
-    blanker: what is on air."""
+    blanker: what is on air.
+
+    Mutes are not noise either: a block more than MUTE_X under the kept
+    blocks' median power (summed over BANDS_HZ), and MUTE_PAD_S each side
+    of it, is marked. Programs sharing the radio (VARA, Winlink) mute or
+    zero the input while they transmit; on two volunteer nodes, 50-86% of
+    the impulses counted sat within 1 s of a mute's edges.
+"""
 
     BANDS_HZ = ((350, 950), (950, 1300), (1300, 1750), (1750, 2100), (2100, 2700))
     BLOCK = FS // 10
@@ -188,6 +195,18 @@ class NoiseProfile:
     IMPULSE_X = 10.0  # 20 dB
     RECENT = 400  # blocks (40 s) of spectra kept for span energy (span_snr_db)
 
+    # span_snr_db's AGC gauge: the passband outside the burst's band (less a
+    # guard), whose level change from the floor is the receiver's AGC gain
+    # change under the burst (issue #257: on air it falls about as much as
+    # the burst's SNR, 5-20 dB, with a <0.1 s attack)
+    GAUGE_HZ = (150.0, 3100.0)
+    GAUGE_GUARD_HZ = 50.0
+    GAUGE_MIN = 1e-3  # the most it scales the floor down (30 dB)
+
+    MUTE_X = 0.01  # 20 dB under the kept median: a mute (0 turns it off)
+    MUTE_PAD_S = 1.0
+
+
     def __init__(self):
         f = np.fft.rfftfreq(self.BLOCK, 1 / FS)
         self._bins = [(f >= lo) & (f < hi) for lo, hi in self.BANDS_HZ]
@@ -197,6 +216,7 @@ class NoiseProfile:
         self._pending = deque()  # (start, end, band powers, impulses) not yet COMMIT_S old
         self._busy = []  # marked (start, end)
         self.kept = deque(maxlen=self.WINDOW)  # band powers
+        self.kept_total = deque(maxlen=self.WINDOW)  # their sum (mutes' reference)
         self.kept_impulses = deque(maxlen=self.WINDOW)  # impulses per kept block
         self.kept_spec = deque(maxlen=self.WINDOW)  # each kept block's power spectrum (span_snr_db's floor)
         self.recent = deque(maxlen=self.RECENT)  # (start, end, power spectrum) of every block fed
@@ -209,6 +229,9 @@ class NoiseProfile:
             self._buf = np.concatenate([self._buf, x])
         else:
             self._buf, self._s0 = np.asarray(x, dtype=np.float64), s
+        # kept only changes below: one reference for every block here
+        ref_total = float(np.median(self.kept_total)) if len(self.kept_total) >= self.MIN_BLOCKS else 0.0
+        pad = round(self.MUTE_PAD_S * FS)
         while len(self._buf) >= self.BLOCK:
             blk = self._buf[:self.BLOCK]
             spec = self.spectrum(blk)
@@ -216,7 +239,14 @@ class NoiseProfile:
             pieces = blk.reshape(-1, self.PIECE)
             ref = np.median(np.sqrt(np.mean(pieces ** 2, axis=1)))
             imp = int(np.sum(np.max(np.abs(pieces), axis=1) > self.IMPULSE_X * ref)) if ref > 0 else 0
-            self._pending.append((self._s0, self._s0 + self.BLOCK, [float(spec[b].mean()) for b in self._bins], imp, spec))
+            p = [float(spec[b].mean()) for b in self._bins]
+            if sum(p) < self.MUTE_X * ref_total:  # a mute: merged into the last mark where they overlap
+                a, b = self._s0 - pad, self._s0 + self.BLOCK + pad
+                if self._busy and self._busy[-1][0] <= a <= self._busy[-1][1]:
+                    self._busy[-1] = (self._busy[-1][0], max(self._busy[-1][1], b))
+                else:
+                    self._busy.append((a, b))
+            self._pending.append((self._s0, self._s0 + self.BLOCK, p, imp, spec))
             self._buf, self._s0 = self._buf[self.BLOCK:], self._s0 + self.BLOCK
         now = s + len(x)
         commit = round(self.COMMIT_S * FS)
@@ -224,6 +254,7 @@ class NoiseProfile:
             a, b, p, imp, spec = self._pending.popleft()
             if not any(s0 < b and a < e for s0, e in self._busy):
                 self.kept.append(p)
+                self.kept_total.append(sum(p))
                 self.kept_impulses.append(imp)
                 self.kept_spec.append(spec)
         self._busy = [(s0, e) for s0, e in self._busy if e > now - 2 * commit]
@@ -243,13 +274,22 @@ class NoiseProfile:
         None without a floor or blocks. `spectra`: the burst's block power
         spectra (spectrum(); span_spectra() for audio already fed).
         `floor_spectra`: the noise to measure against instead of the kept
-        blocks (the sim's noise is set per burst, against its peak)."""
+        blocks (the sim's noise is set per burst, against its peak).
+        Receiver AGC: the floor is scaled by the out-of-band level's fall
+        under the burst (GAUGE_HZ outside lo..hi; a rise is not used), so
+        the noise it measures against is the burst's own."""
         ref = self.kept_spec if floor_spectra is None else floor_spectra
         if (floor_spectra is None and len(ref) < self.MIN_BLOCKS) or not len(ref) or not len(spectra):
             return None
         band = self._in_band(lo, hi)
         floor = float(np.median([s[band].mean() for s in ref]))
         power = float(np.mean([s[band].mean() for s in spectra]))
+        gauge = self._in_band(*self.GAUGE_HZ) & ~self._in_band(lo - self.GAUGE_GUARD_HZ, hi + self.GAUGE_GUARD_HZ)
+        if gauge.any():
+            g_floor = float(np.median([s[gauge].mean() for s in ref]))
+            if g_floor > 0:
+                g = float(np.mean([s[gauge].mean() for s in spectra])) / g_floor
+                floor *= min(1.0, max(g, self.GAUGE_MIN))
         if floor <= 0:
             return None
         return float(10 * np.log10(max(power / floor - 1, 1e-3) * (hi - lo) / SNR_REF_BW_HZ))
@@ -341,6 +381,7 @@ class Receiver:
         self.buf = np.zeros(0)
         self.off = 0  # stream sample index of buf[0]
         self.pending = None
+        self._inc = None  # (pending start, audio fed at the last partial receive, slots ready then): _partial
         self.pilots_ok = False
         self.confirmed = False  # the pending burst's header is clear and its pilots are there
         self._dark = 0  # the pending lock's latest pilot checks in a row with its pilots measurably absent (RELEASE_S)
@@ -357,6 +398,8 @@ class Receiver:
         # per band / CPM grid: starts before this stream index have been
         # searched with all the audio their header needs (not searched again)
         self.decided: dict = {}
+        from . import cpm
+        self.coarse = {g.name: cpm.CoarseTrack(g) for g in self.grids}  # each grid's search rows (_find_cpm)
         # CPM fronts whose first header copy fell short (cpm.find's candidates,
         # stream indices): read again with both copies once the second is in
         self.cpm_wait: list = []
@@ -436,6 +479,34 @@ class Receiver:
             return False
         floor = np.percentile(self.powers, 5)
         return float(np.mean(list(self.powers)[-3:])) > floor * 10 ** (self.ON_AIR_DB / 10)
+
+    def _partial(self, out: list, p: dict) -> None:
+        """Decoding while the burst arrives (config.SPREAD_WINDOW): with a
+        window's frames more of a pending OFDM burst in since the last
+        look, receive what is in (modem.receive(partial=True)) and, if
+        codeword groups have completed, report it: ("partial", {header,
+        rx}), the same burst's "burst" event following at its end. Copy
+        locks (preamble lost) wait for the end as before."""
+        if not (DECODE_EARLY and SPREAD_WINDOW) or p.get("family") == "cpm" or "copy" in p:
+            return
+        now = self.off + len(self.buf)
+        if self._inc is None or self._inc[0] != p["start"]:
+            self._inc = (p["start"], now, 0)
+            return
+        if now - self._inc[1] < SPREAD_WINDOW * FRAME_SAMPLES:
+            return
+        s0 = max(0, p["start"] - self.MARGIN - self.off)
+        seg = self.buf[s0:]
+        head = p["start"] - self.off - s0 + modem.receive_head(p["band"])
+        try:
+            r = modem.receive(seg, [p["band"]], self.accept, head=min(head, len(seg)), partial=True)
+        except modem.SyncError:
+            self._inc = (p["start"], now, self._inc[2])
+            return
+        ready, before = len(modem.ready_slots(r)), self._inc[2]
+        self._inc = (p["start"], now, max(ready, before))
+        if ready > before:  # codeword groups newly complete
+            out.append(("partial", {"header": p, "rx": r}))
 
     def _check_pilots(self):
         """pilots_ok from the newest PILOT_PAIRS frame pilot pairs: under the
@@ -658,8 +729,10 @@ class Receiver:
             if lock is not None:
                 return dict(lock, n_cw=1 + lock["dup"] + lock["n_data"])
         for g in self.grids:
+            self.coarse[g.name].feed(self.buf, self.off)
             lock = cpm.find(g, self.buf, lo=max(0, self.decided.get(g.name, 0) - self.off),
-                            hi=len(self.buf) - search_span((), (g.name,)) + 2 * g.T, wait=True)
+                            hi=len(self.buf) - search_span((), (g.name,)) + 2 * g.T, wait=True,
+                            track=self.coarse[g.name], x0=self.off)
             if lock is None:
                 continue
             if not lock.get("wait"):
@@ -672,7 +745,8 @@ class Receiver:
                 self.cpm_wait.append(c)
         for g in self.grids:  # the front missed: the mid block and both header copies
             lock = cpm.find_mid(g, self.buf, lo=max(0, self.decided.get(g.name + "/mid", 0) - self.off),
-                                hi=len(self.buf) - (len(cpm.mid_block(g)) + cpm.hdr_len(g) - 1) * g.T)
+                                hi=len(self.buf) - (len(cpm.mid_block(g)) + cpm.hdr_len(g) - 1) * g.T,
+                                track=self.coarse[g.name], x0=self.off)
             if lock is not None:
                 return dict(lock, n_cw=1 + lock["dup"] + lock["n_data"])
         return None
@@ -746,6 +820,7 @@ class Receiver:
                 out.append(("header", dict(self.pending, stream_end=self.off + len(self.buf))))
             p = self.pending
             if self.off + len(self.buf) < p["end"] + self.MARGIN:
+                self._partial(out, p)
                 if self.fresh >= self.HOP:
                     self._check_pilots()
                     # the later-header search is for false locks: a confirmed

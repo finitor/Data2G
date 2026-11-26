@@ -166,6 +166,23 @@ def test_receive_chain(native, reference, case):
     np.testing.assert_allclose(m["snr"], m_ref["snr"], rtol=RTOL, atol=1e-12)
 
 
+@pytest.mark.parametrize("name", ["fsk16r25-r1/2", "fsk8r50-r1/3"])
+def test_spread_on_selective_fading_matches(native, reference, name):
+    """cpm.spread's no-fit branch (SPREAD_NEAR_*): slow selective fading
+    reads unmeasured, fast SPREAD_MAX_HZ, alike in both, and each of these
+    outcomes is taken."""
+    from test_cpm import _faded_control_energies
+
+    seen = set()
+    for doppler, delay_ms, snr in ((0.1, 2.0, 2), (1.0, 2.0, -6), (10.0, 7.0, 0), (30.0, 7.0, 0)):
+        for seed in range(12):
+            g, E = _faded_control_energies(name, doppler, delay_ms, snr, seed)
+            m, m_ref = native.cpm.measure(g.name, E, len(E)), ref(reference, "measure")(g, E, len(E))
+            assert m["spread_est"] == pytest.approx(m_ref["spread_est"], rel=1e-9, abs=1e-12), (doppler, seed)
+            seen.add(m_ref["spread_est"] if m_ref["spread_est"] in (cpm.UNMEASURED_SPREAD_HZ, cpm.SPREAD_MAX_HZ) else "fit")
+    assert seen == {cpm.UNMEASURED_SPREAD_HZ, cpm.SPREAD_MAX_HZ, "fit"}
+
+
 @pytest.mark.parametrize("name,n_data", [(s.name, n) for s in cpm.SPECS.values() if s.name.endswith("r1/2")
                                          for n in (0, 3)])
 def test_late_lock(native, reference, name, n_data):
@@ -317,3 +334,81 @@ def test_coherent(native, reference, case):
             np.testing.assert_allclose(M, ref(reference, "dd_metric")(r, p, slot), rtol=1e-9, atol=1e-9)
             np.testing.assert_allclose(native.cpm.dd_soft(spec.name, dup, n_cw, M, slot), ref(reference, "dd_soft")(r, M, slot),
                                        rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("case", CASES[:2], ids=[c[0] for c in CASES[:2]])
+def test_per_tone_floors(native, reference, case):
+    """A steady carrier in the passband: tone_floors' path through the tone
+    metric, the header reads, refine, the soft values and the coherent
+    metric, alike in both."""
+    name, n_data, dup, cfo, sigma = case
+    spec = cpm.SPECS[name]
+    g = cpm.GRIDS[spec.grid]
+    rng = np.random.default_rng(40 + CASES.index(case))
+    coded = _burst(spec, n_data, dup, rng)
+    y = _channel(ref(reference, "modulate")(spec, coded, dup), rng, lead=1777, cfo=cfo, sigma=sigma)
+    hz = g.f0 + 5.4 * g.rate  # between two tones
+    y = y + 2.5 * sigma * np.cos(2 * np.pi * hz * np.arange(len(y)) / FS + 1.0)
+    assert native.cpm.FLOOR_SIGMAS == cpm.FLOOR_SIGMAS
+
+    s0, f = 1777, cfo
+    lay = cpm.layout(g.name, cpm.stream_symbols(g.name, n_data, dup))
+    E = ref(reference, "_energies")(g, y, s0, lay.n, f)
+    assert cpm.tone_floors(E[:60], cpm._n0(E[:60])) is not None, "the case must take the per-tone path"
+    for rows in (E[:22], E[:60], E):
+        np.testing.assert_allclose(native.cpm.tone_llr(g.name, rows), ref(reference, "tone_llr")(g, rows), rtol=1e-9,
+                                   atol=1e-9)
+        for fn in ("llrs", "symbol_ll"):
+            np.testing.assert_allclose(getattr(native.cpm, fn)(g.name, rows), ref(reference, fn)(g, rows), rtol=1e-9,
+                                       atol=1e-9)
+        m, m_ref = native.cpm.measure(g.name, rows, len(rows)), ref(reference, "measure")(g, rows, len(rows))
+        for k in ("snr_est", "spread_est", "frames"):
+            assert m[k] == pytest.approx(m_ref[k], rel=1e-9, abs=1e-12), k
+        np.testing.assert_allclose(m["snr"], m_ref["snr"], rtol=RTOL, atol=1e-12)
+    for copies in (1, 2):
+        a, b = native.cpm.read_header(g.name, y, s0, f, copies), ref(reference, "read_header")(g, y, s0, f, copies)
+        assert a[:3] == (b[0].name, *b[1:3])
+        assert a[3:] == pytest.approx(b[3:], rel=1e-9, abs=1e-9)
+        a = native.cpm.coh_read_header(g.name, y, s0, f, copies)
+        b = ref(reference, "coh_read_header")(g, y, s0, f, copies)
+        assert a[:3] == (b[0].name, *b[1:3])
+        assert a[3:] == pytest.approx(b[3:], rel=1e-9, abs=1e-9)
+    for dt, df in ((0, 0.0), (g.T // 5, -3.3)):
+        a = native.cpm.refine(g.name, y, s0 + dt, f + df, name, n_data, dup)
+        b = ref(reference, "refine")(g, y, s0 + dt, f + df, spec, n_data, dup)
+        assert a[0] == b[0] and a[1] == pytest.approx(b[1], rel=RTOL), (dt, df)
+    slots, _ = native.cpm.soft(g.name, y, s0, f, n_data, dup)
+    slots_ref, _ = ref(reference, "soft")(g, spec, y, s0, f, n_data, dup)
+    for a, b in zip(slots, slots_ref):
+        np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-9)
+
+    Z = ref(reference, "bins")(g, y, s0, lay.n, f)
+    n0 = ref(reference, "_n0")(np.abs(Z) ** 2)
+    P = rng.dirichlet(np.ones(g.m) * 0.3, len(Z))
+    np.testing.assert_allclose(native.cpm.coh_metric(Z, P, cpm.COH_W, n0), ref(reference, "coh_metric")(Z, P, cpm.COH_W, n0),
+                               rtol=1e-9, atol=1e-9)
+    n_cw = 1 + dup + n_data
+    r = dict(spec=spec, band=g.name, n_cw=n_cw, n_ctl_slots=1 + dup, dup=dup, Z=Z)
+    for slot in range(n_cw):
+        M = native.cpm.dd_metric(spec.name, dup, n_cw, Z, {}, slot)
+        np.testing.assert_allclose(M, ref(reference, "dd_metric")(r, {}, slot), rtol=1e-9, atol=1e-9)
+
+
+def test_coarse_track(native, reference):
+    """C++ CoarseTrack fed as a receiver feeds it (20 ms, buffer trimmed to
+    a second): detect and find reading it as Python's do reading cpm.py's."""
+    rng = np.random.default_rng(6)
+    for g in GRIDS:
+        x = rng.normal(0, 1, 4 * FS)
+        tn, tp, off, buf = native.cpm.CoarseTrack(g.name), ref(reference, "CoarseTrack")(g), 0, np.zeros(0)
+        for i in range(0, len(x), FS // 50):
+            buf = np.concatenate([buf, x[i:i + FS // 50]])
+            if len(buf) > FS:
+                off, buf = off + len(buf) - FS, buf[len(buf) - FS:]
+            tn.feed(buf, off)
+            tp.feed(buf, off)
+        assert tn.extra == tp.extra
+        for kw in (dict(front_only=True, fine=False), dict(mid=True)):
+            a, b = native.cpm.detect(g.name, buf[37:], track=tn, x0=off + 37, **kw), \
+                ref(reference, "detect")(g, buf[37:], track=tp, x0=off + 37, **kw)
+            assert a[1:] == b[1:] and a[0] == pytest.approx(b[0], rel=RTOL), (g.name, kw)

@@ -13,7 +13,7 @@ from data2g.arq import phy as PHY
 from data2g.arq import session as S
 from data2g.arq.burst import Slot, TxBurst, ctl_mask, data_mask
 from data2g.arq.modes import MODES, ctl_spec
-from data2g.config import FS
+from data2g.config import FM_TX_PEAK, FS, PROFILE
 from test_engine import BLOCK, link
 
 
@@ -46,6 +46,8 @@ def test_cwsense_hears_an_id_not_noise_or_narrow_bursts():
     assert not _active(np.random.default_rng(2).normal(size=60 * FS)).any()
     rng = np.random.default_rng(3)
     for name in ("n4-qpsk-r1/3", "n10-qpsk-r1/2", "fsk16r25-r1/3", "fsk8r50-r1/2", "w48-qpsk-r1/2"):
+        if name not in MODES:  # FM has no n4
+            continue
         spec = MODES[name]
         r = lambda sp: bytes(rng.integers(0, 256, codes.payload_bytes(sp), dtype=np.uint8))  # noqa: E731
         slots = [Slot(ctl_mask(0, 0, 5), 0, r(ctl_spec(spec)))] + [Slot(data_mask(0, i, 5), 0, r(spec)) for i in (1, 2)]
@@ -65,6 +67,63 @@ def test_cwsense_ignores_a_steady_tone_starting_and_ending():
         assert not _active(H.awgn(np.concatenate([pad, x, pad]), 20, seed=6)).any(), freq
     tone = np.sin(2 * np.pi * 1500 * np.arange(3 * FS) / FS)
     assert not _active(H.awgn(np.concatenate([pad, tone, pad]), 20, seed=7)).any()
+
+
+def test_cwsense_ignores_a_weak_steady_carrier():
+    """A steady carrier near RATIO times the floor flickers over and under it
+    with the noise: keyed by the run rule, but its quiet windows still hold
+    the tone (CwSense.QUIET_MAX). At 8-12 dB over the noise in 50 Hz, on the
+    centre and 73 Hz off it, one read as a CW ID 70-85% of the time, and a
+    session under it held every timeout (on_cw) and delivered nothing."""
+    n = 30 * FS
+    for freq in (1500.0, 1573.4):
+        for inr in (8, 10, 12):
+            a = np.sqrt(2 * 50 / (FS / 2) * 10 ** (inr / 10))  # over unit-variance noise's power in 50 Hz
+            y = np.random.default_rng(8).normal(size=n) + a * np.sin(2 * np.pi * freq * np.arange(n) / FS)
+            assert _active(y).mean() < 0.02, (freq, inr)
+
+
+@pytest.mark.parametrize("preset", ["mpp", "mpd"])
+def test_cwsense_under_a_fading_carrier(preset):
+    """A steady, unkeyed carrier 73 Hz off the centre that fades (1 and 2 Hz
+    Doppler), at a mean 10-18 dB over the noise in 50 Hz: it goes through
+    the level where it flickers about RATIO, and read as a CW ID 20-57% of
+    the time before QUIET_MAX. Each reading holds transmission and moves a
+    reply deadline on (Session.on_cw). Bound: 15%, since a deep fade is a
+    real gap at the floor and some readings remain."""
+    n = 30 * FS
+    f = H.fading(np.sin(2 * np.pi * 1573.4 * np.arange(n) / FS), preset, seed=11)
+    for inr in (10, 14, 18):
+        a = np.sqrt(2 * 50 / (FS / 2) * 10 ** (inr / 10)) / np.sqrt(2 * np.mean(f ** 2))  # the mean, over unit-variance noise
+        y = np.random.default_rng(12).normal(size=n) + a * f
+        assert _active(y).mean() < 0.15, inr
+
+
+@pytest.mark.parametrize("fading", [None, "mpp", "mpd"])
+def test_a_carrier_does_not_hold_the_connect_retry(fading):
+    """A caller nobody answers, under an unkeyed 1573.4 Hz carrier 12 dB
+    over the noise in 50 Hz (interference.Qrm), steady or fading: its first
+    retry goes out within 16 s (a quiet channel: 8.3-10 s; a fading carrier
+    still reads as a CW ID now and then, and each reading may hold it 2.5 s).
+    Each false CW ID reading holds transmission and moves the reply deadline
+    on (Session.on_cw): steady or fading, six seeds each, no retry was keyed
+    in 30 s (in a session: none for 88 s, and nothing delivered)."""
+    from data2g import interference as I
+
+    seconds, block = 20.0, 80
+    n = int(seconds * FS)
+    sigma = np.sqrt((FS / 2) / 2500.0)  # the floor of a 0 dB signal
+    carrier = I.Interference(I.Spec(qrm=(I.Qrm("carrier", 1573.4, 50.0, 12.0, seconds, 1.0),)), 1, seconds).render(0.0, n, sigma)
+    x = np.random.default_rng(1).normal(0, sigma, n) + (H.fading(carrier, fading, seed=1) if fading else carrier)
+    a = E.Engine("W1AW", seed=1)
+    a.connect("K2XYZ", 2)
+    keyed, was = [], False
+    for i in range(0, n, block):
+        _, ptt = a.step(x[i:i + block])
+        if ptt and not was:
+            keyed.append(i / FS)
+        was = ptt
+    assert len(keyed) >= 2 and keyed[1] < 16.0, keyed
 
 
 def _cw_tx(path):
@@ -142,3 +201,22 @@ def test_cw_id_after_a_cq_frame():
     run(sent[1][0] + E.CW_PLAN_S + 20)
     assert [m for _, m in sent][2:] == [sent[0][1], "cw"]
     assert E.CW_PLAN_S - 1 < sent[3][0] - sent[1][0] < E.CW_PLAN_S + 2
+
+
+def _cw_id_peak(engine):
+    engine.cw_id = "only"
+    engine.send_cq("W1AW", 2)
+    peak = 0.0
+    while engine.now < E.CW_PLAN_S + 30:
+        out, ptt = engine.step(np.zeros(BLOCK))
+        if ptt and engine.tx_submode == "cw":
+            peak = max(peak, float(np.abs(out).max()))
+    return peak
+
+
+def test_cw_id_level():
+    """HF: the bursts' peak, full scale. FM: a burst's RMS at the sound card
+    (phy.full_scale), where a ping set the radio's deviation; it went out
+    11 dB over that."""
+    want = 1.0 if PROFILE == "hf" else 2 ** 0.5 / FM_TX_PEAK
+    assert _cw_id_peak(E.Engine("W1AW", seed=1)) == pytest.approx(want, rel=1e-3)

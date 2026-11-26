@@ -28,7 +28,7 @@ using config::PREAMBLE_CP;
 constexpr double TWO_PI = 2.0 * std::numbers::pi;
 // FS / STEP_HZ: every grid frequency is a whole number of bins of an FFT
 // whose length is a multiple of this.
-constexpr std::int64_t PER = 640;
+constexpr std::int64_t PER = static_cast<std::int64_t>(FS / STEP_HZ);  // 640 at 8 kHz
 static_assert(PER * STEP_HZ == FS);
 
 // fn(bin) for each CFO grid point, on the pool for signals of at least
@@ -310,7 +310,9 @@ RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int
     if (n_out_s < 1) throw std::invalid_argument("raw_stat: signal shorter than a preamble");
     const auto n_out = static_cast<std::size_t>(n_out_s);
     std::vector<double> all(r.freqs);
-    const auto& refs = band.spec->name == "w48" ? NOISE_REF_HZ_W48 : NOISE_REF_HZ;  // sync.noise_ref_hz
+    // sync.NOISE_REF_BY_BAND: bands near the audio passband's edges use the near bins
+    const auto nm = band.spec->name;
+    const auto& refs = nm == "w48" || nm == "f55" || nm == "f108" ? NOISE_REF_HZ_W48 : NOISE_REF_HZ;
     all.insert(all.end(), refs.begin(), refs.end());
     const std::size_t nf = r.freqs.size(), nc = z.size() - t.size() + 1;
     if (!sink) r.S = Mat<double>(nf, n_out);
@@ -519,8 +521,8 @@ Mat<cdouble> pair_products(std::span<const cdouble* const> rows, std::size_t col
     return D;
 }
 
-StreamDetector::StreamDetector(const Band& b, double r)
-    : band(b), reach(r), span(PREAMBLE_CP + static_cast<std::int64_t>(b.spec->preamble_repeats) * M) {
+StreamDetector::StreamDetector(const Band& b, double r, bool keep_outputs)
+    : band(b), reach(r), span(PREAMBLE_CP + static_cast<std::int64_t>(b.spec->preamble_repeats) * M), keep_c_(keep_outputs) {
     reset();
 }
 
@@ -531,6 +533,7 @@ void StreamDetector::reset() {
     C_.assign(n, {});
     D_.assign(n, {});
     s_off_ = c_off_ = d_off_ = 0;
+    c_n_ = 0;
     s0 = c0 = d0 = fed = 0;
     levels.clear();
 }
@@ -541,6 +544,7 @@ void StreamDetector::restart_at(std::int64_t pos) {
 }
 
 StreamDetector::Outputs StreamDetector::outputs_from(std::int64_t start) const {
+    if (!keep_c_) throw std::logic_error("StreamDetector: outputs not kept");
     Outputs o{std::max(c0, start), {}, 0};
     const std::size_t k = clamp_to(o.start - c0, C(0).size());
     o.cols = C(0).size() - k;
@@ -550,6 +554,7 @@ StreamDetector::Outputs StreamDetector::outputs_from(std::int64_t start) const {
 }
 
 void StreamDetector::extend_products(int F, int P) {
+    if (!keep_c_) throw std::logic_error("StreamDetector: outputs not kept");
     if (d0 + static_cast<std::int64_t>(D_[0].size() - d_off_) < c0) {  // not extended across a trim: start at C's
         for (auto& row : D_) row.clear();
         d_off_ = 0;
@@ -587,6 +592,7 @@ void StreamDetector::skip_to(std::int64_t pos) {
     for (auto& row : C_) row.clear();
     for (auto& row : D_) row.clear();
     s_off_ = c_off_ = d_off_ = 0;
+    c_n_ = 0;
     s0 = c0 = d0 = fed = pos;
 }
 
@@ -604,16 +610,17 @@ void StreamDetector::feed(std::span<const cdouble> z_new) {
     // the level from the new outputs, at least 2000 (0.25 s) of the latest
     const auto levels_from = static_cast<std::size_t>(std::max<std::int64_t>(0, len - M + 1 - std::max<std::int64_t>(added, 2000)));
     const std::int64_t zs = fed - len;  // stream index of z[0], so of c[0]
-    if (C(0).empty()) c0 = zs;
-    const std::int64_t have = c0 + static_cast<std::int64_t>(C(0).size());  // outputs overlap the last chunk's
+    if (!c_n_) c0 = zs;
+    const std::int64_t have = c0 + static_cast<std::int64_t>(c_n_);  // outputs overlap the last chunk's
     const auto n_c = static_cast<std::size_t>(len - M + 1), n_s = static_cast<std::size_t>(len - span + 1);
     const std::size_t skip = clamp_to(have - zs, n_c);
     // each bin's rows appended as raw_stat makes them (still in cache; no zeroed matrices copied after)
     const RawSink sink = [&](std::size_t i, const cdouble* c, const double* s) {
-        C_[i].insert(C_[i].end(), c + skip, c + n_c);
+        if (keep_c_) C_[i].insert(C_[i].end(), c + skip, c + n_c);
         S_[i].insert(S_[i].end(), s, s + n_s);
     };
     RawStat r = raw_stat(z, band, reach, 0, levels_from, true, &sink);
+    c_n_ += n_c - skip;
     levels.push_back(std::move(r.q));
     if (levels.size() > static_cast<std::size_t>(CHUNKS)) levels.erase(levels.begin());
     tail.assign(z.begin() + static_cast<std::ptrdiff_t>(n_s), z.end());
@@ -633,8 +640,9 @@ void StreamDetector::trim(std::int64_t start) {
     const std::size_t k = clamp_to(start - s0, S(0).size());
     drop_front(S_, s_off_, k);
     s0 += static_cast<std::int64_t>(k);
-    const std::size_t kc = clamp_to(start - c0, C(0).size());
-    drop_front(C_, c_off_, kc);
+    const std::size_t kc = clamp_to(start - c0, c_n_);
+    if (keep_c_) drop_front(C_, c_off_, kc);
+    c_n_ -= kc;
     c0 += static_cast<std::int64_t>(kc);
     const std::size_t kd = clamp_to(start - KEEP_BEHIND - d0, D_[0].size() - d_off_);
     drop_front(D_, d_off_, kd);
@@ -651,6 +659,18 @@ std::optional<double> StreamDetector::level() const {
         med[b] = v.size() % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
     }
     return level_of(med);
+}
+
+double StreamDetector::peak(std::int64_t lo, std::int64_t hi) const {
+    const std::int64_t a = std::max(lo, s0), b = std::min(hi, s0 + static_cast<std::int64_t>(S(0).size()));
+    const auto q = level();
+    if (!(b > a && q)) return -1.0;
+    double top = -INFINITY;
+    for (std::size_t i = 0; i < bins(); ++i) {
+        const double* src = S(i).data() + (a - s0);
+        for (std::int64_t j = 0; j < b - a; ++j) top = std::max(top, src[j]);
+    }
+    return top / *q;
 }
 
 Mat<double> StreamDetector::stat(std::int64_t lo, std::int64_t hi) const {

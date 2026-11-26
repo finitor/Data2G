@@ -1,6 +1,7 @@
 #include "cpm/cpm.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -49,13 +50,34 @@ std::vector<cdouble> fft_rows(const std::vector<cdouble>& z, std::size_t rows, s
     return out;
 }
 
-// |Z[:, :nb]| ** 2 (hypot, then squared, as numpy's abs and power).
+// `rows` symbols of T real samples from x, each zero-padded to 4T -> |rfft|^2 (numpy's rfft(n=4T),
+// re^2 + im^2): rows x (2T + 1), bins R / 4 apart (detect's coarse stage).
+Mat<double> padded_power(const double* x, std::size_t rows, std::size_t T) {
+    const std::size_t N = 4 * T, nf = 2 * T + 1;
+    Mat<double> P(rows, nf);
+    if (!rows) return P;
+    std::vector<double> in(rows * N, 0.0);
+    for (std::size_t r = 0; r < rows; ++r) std::copy(x + r * T, x + (r + 1) * T, in.begin() + static_cast<std::ptrdiff_t>(r * N));
+    std::vector<cdouble> out(rows * nf);
+    pocketfft::r2c(pocketfft::shape_t{rows, N},
+                   pocketfft::stride_t{static_cast<std::ptrdiff_t>(N * sizeof(double)), static_cast<std::ptrdiff_t>(sizeof(double))},
+                   pocketfft::stride_t{static_cast<std::ptrdiff_t>(nf * sizeof(cdouble)), static_cast<std::ptrdiff_t>(sizeof(cdouble))},
+                   pocketfft::shape_t{1}, true, in.data(), out.data(), 1.0);
+    for (std::size_t r = 0; r < rows; ++r)
+        for (std::size_t k = 0; k < nf; ++k) {
+            const cdouble z = out[r * nf + k];
+            P[r][k] = z.real() * z.real() + z.imag() * z.imag();
+        }
+    return P;
+}
+
+// |Z[:, :nb]| ** 2 as re^2 + im^2 (cpm.py's _sq).
 Mat<double> power(const std::vector<cdouble>& Z, std::size_t rows, std::size_t T, std::size_t nb) {
     Mat<double> E(rows, nb);
     for (std::size_t r = 0; r < rows; ++r)
         for (std::size_t k = 0; k < nb; ++k) {
-            const double a = std::hypot(Z[r * T + k].real(), Z[r * T + k].imag());
-            E[r][k] = a * a;
+            const cdouble z = Z[r * T + k];
+            E[r][k] = z.real() * z.real() + z.imag() * z.imag();
         }
     return E;
 }
@@ -282,8 +304,71 @@ Mat<double> shares(const Mat<double>& E) {
     return out;
 }
 
+// cpm.coarse_rows: x's whole symbols -> n x (4 nb): symbol k's tones from `extra` bins below the grid at CFO
+// fraction q / 4, as shares, at [k][q nb ..]. One rfft per symbol zero-padded to 4T, bins R / 4 apart: a tone at
+// f0 + k R is bin 4 (f0 / R + k) (f0 a whole number of bins), so fraction q / 4 is that bin + q, what mixing by
+// it and a T-point FFT would give.
+Mat<double> coarse_rows(const Grid& g, std::span<const double> x, int extra) {
+    const std::size_t T = static_cast<std::size_t>(g.T), n = x.size() / T, nb = g.m + 2 * extra;
+    Mat<double> out(n, 4 * nb);
+    if (!n) return out;
+    const Mat<double> P = padded_power(x.data(), n, T);
+    const std::int64_t bin0 = 4 * (static_cast<std::int64_t>(std::lround(g.f0 / g.rate)) - extra);
+    Mat<double> E(n, nb);
+    for (int q = 0; q < 4; ++q) {
+        for (std::size_t r = 0; r < n; ++r)
+            for (std::size_t b = 0; b < nb; ++b) E[r][b] = P[r][bin0 + q + 4 * static_cast<std::int64_t>(b)];
+        const Mat<double> S = shares(E);
+        for (std::size_t r = 0; r < n; ++r) std::copy(S[r], S[r] + nb, out[r] + q * nb);
+    }
+    return out;
+}
+
+CoarseTrack::CoarseTrack(const Grid& g, double reach_hz)
+    : extra(static_cast<int>(std::ceil(reach_hz / g.rate))), g_(&g) {}
+
+void CoarseTrack::feed(std::span<const double> buf, std::int64_t off) {
+    const std::int64_t T = g_->T, end = off + static_cast<std::int64_t>(buf.size());
+    std::erase_if(fine_memo, [&](const FineMemo& m) { return m.s < off + T; });  // (fine reaches T/8 before)
+    std::erase_if(header_memo, [&](const HeaderMemo& m) { return m.s < off; });
+    const std::size_t w = 4 * (g_->m + 2 * extra);
+    for (int ph = 0; ph < 4; ++ph) {
+        auto& s = s_[ph];
+        auto& E = E_[ph];
+        if (!s || *s < off) {
+            const std::int64_t first = off + ((ph * T / 4 - off) % T + T) % T;
+            if (s) {  // the rows still in buf
+                const auto drop = std::min<std::size_t>(E.size() / w, static_cast<std::size_t>((first - *s) / T));
+                E.erase(E.begin(), E.begin() + static_cast<std::ptrdiff_t>(drop * w));
+            }
+            s = first;
+        }
+        const std::int64_t nxt = *s + static_cast<std::int64_t>(E.size() / w) * T;
+        if (end - nxt < T) continue;
+        const Mat<double> R = coarse_rows(*g_, buf.subspan(static_cast<std::size_t>(nxt - off)), extra);
+        E.insert(E.end(), R.data.begin(), R.data.end());
+    }
+}
+
+std::vector<std::pair<std::int64_t, Mat<double>>> CoarseTrack::rows(std::int64_t a, std::int64_t b) const {
+    const std::int64_t T = g_->T;
+    const std::size_t w = 4 * (g_->m + 2 * extra);
+    std::vector<std::pair<std::int64_t, Mat<double>>> out;
+    for (int ph = 0; ph < 4; ++ph) {
+        if (!s_[ph]) continue;
+        const std::int64_t s = *s_[ph], have = static_cast<std::int64_t>(E_[ph].size() / w);
+        const std::int64_t k0 = std::max<std::int64_t>(0, -floor_div(s - a, T));  // the first row starting at or after a
+        const std::int64_t k1 = std::max(k0, std::min(have, floor_div(b - s, T)));  // rows ending by b
+        Mat<double> M(static_cast<std::size_t>(k1 - k0), w);
+        std::copy(E_[ph].begin() + static_cast<std::ptrdiff_t>(k0 * w), E_[ph].begin() + static_cast<std::ptrdiff_t>(k1 * w),
+                  M.data.begin());
+        out.emplace_back(s + k0 * T - a, std::move(M));
+    }
+    return out;
+}
+
 Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool fine, bool front_only, int n_sym,
-                 double floor, bool mid) {
+                 double floor, bool mid, const CoarseTrack* track, std::int64_t x0) {
     const Layout L = layout(g, n_sym ? n_sym : stream_symbols(g, 0, false));
     std::span<const int> rows = L.sync_rows, tones_ = L.sync_tones;
     if (front_only) {
@@ -303,20 +388,24 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
     const std::size_t nb = g.m + 2 * extra, ndk = 2 * extra + 1;
     Detection best{-1.0, 0, 0.0};
     const std::int64_t len = static_cast<std::int64_t>(x.size());
-    std::vector<cdouble> zf(x.size());
-    for (double frac : {0.0, 0.25, 0.5, 0.75}) {
-        // mixed once per CFO fraction as numpy does: (w * n) / FS, the
-        // division a complex one (times 1 / FS)
-        const double w = (-2 * PI) * (g.f0 - extra * g.rate + frac * g.rate), inv = 1.0 / FS;
-        for (std::int64_t i = 0; i < len; ++i) {
-            const double arg = (w * static_cast<double>(i)) * inv;
-            zf[i] = {x[i] * std::cos(arg), x[i] * std::sin(arg)};
-        }
+    // per timing phase: its first symbol's sample in x, coarse_rows of its symbols (cpm.py's detect)
+    std::vector<std::pair<std::int64_t, Mat<double>>> C;
+    if (track) {
+        if (track->extra != extra) throw std::invalid_argument("detect: track's reach differs");
+        C = track->rows(x0, x0 + len);
+    } else {
         for (int ph = 0; ph < 4; ++ph) {
-            const std::int64_t off = ph * T / 4, n = (len - off) / T;
+            const std::int64_t off = std::min(len, ph * T / 4);
+            C.emplace_back(off, coarse_rows(g, x.subspan(static_cast<std::size_t>(off)), extra));
+        }
+    }
+    for (int q = 0; q < 4; ++q) {
+        const double frac = 0.25 * q;
+        for (const auto& [off, E4] : C) {
+            const std::int64_t n = static_cast<std::int64_t>(E4.rows);
             if (n < span) continue;
-            std::vector<cdouble> seg(zf.begin() + off, zf.begin() + off + n * T);
-            const Mat<double> E = shares(power(fft_rows(seg, n, T), n, T, nb));
+            Mat<double> E(static_cast<std::size_t>(n), nb);
+            for (std::int64_t r = 0; r < n; ++r) std::copy(E4[r] + q * nb, E4[r] + (q + 1) * nb, E[r]);
             const std::int64_t J = n - span + 1;
             std::vector<double> S(ndk * J, 0.0);  // S[dk, j] = sum over r of E[rows_r + j, tone_r + dk]
             for (std::size_t dk = 0; dk < ndk; ++dk)
@@ -333,6 +422,15 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
         }
     }
     if (fine && best.score >= floor) {  // timing to T/32, CFO to R/16
+        // the fine search's samples: [best.start - T/8, best.start + span T + T/8]
+        const bool whole = best.start + floor_div(-T, 8) >= 0 && best.start + T / 8 + span * T <= len;
+        if (track && whole) {
+            const std::int64_t s_abs = x0 + best.start;
+            for (const auto& m : track->fine_memo)
+                if (m.s == s_abs && m.cfo == best.cfo && m.front_only == front_only && m.mid == mid)
+                    return {best.score, m.fine.start - x0, m.fine.cfo};
+        }
+        const Detection coarse = best;
         double top = 0;
         std::int64_t s_best = 0;
         double c_best = 0;
@@ -373,6 +471,8 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
         }
         best.start = s_best;
         best.cfo = c_best;
+        if (track && whole)
+            track->fine_memo.push_back({x0 + coarse.start, coarse.cfo, front_only, mid, {best.score, x0 + best.start, best.cfo}});
     }
     return best;
 }
@@ -389,29 +489,95 @@ double spill(const Mat<double>& E, double n0, double es) {
     return std::clamp(np_mean(nb) / 2 / es, 0.0, 1.0);
 }
 
-// cpm.tone_metric's factor: the square law's Es / (N0 (N0 + Es)), the codeword's Es, N0 plus the spill.
-double metric_scale(const Mat<double>& E) {
+// np.median of v (reordered).
+double np_median(std::vector<double>& v) {
+    const std::size_t n = v.size(), h = n / 2;
+    std::nth_element(v.begin(), v.begin() + h, v.end());
+    if (n % 2) return v[h];
+    const double hi = v[h], lo = *std::max_element(v.begin(), v.begin() + h);
+    return (lo + hi) / 2;
+}
+
+// cpm.tone_floors: per-tone noise floors, N0 times the tone's median over the tones' median where it stands
+// FLOOR_SIGMAS standard errors over that (a steady carrier), N0 elsewhere; empty where none does.
+std::vector<double> tone_floors(const Mat<double>& E, double n0) {
+    if (!E.rows) return {};
+    std::vector<double> med(E.cols), col(E.rows);
+    for (std::size_t k = 0; k < E.cols; ++k) {
+        for (std::size_t r = 0; r < E.rows; ++r) col[r] = E[r][k];
+        med[k] = np_median(col);
+    }
+    std::vector<double> sorted = med;
+    const double ref = np_median(sorted);
+    const double bar = ref * (1 + FLOOR_SIGMAS * 1.44 / std::sqrt(static_cast<double>(E.rows)));
+    std::vector<double> nb(E.cols, n0);
+    bool any = false;
+    for (std::size_t k = 0; k < E.cols; ++k)
+        if (med[k] > bar) nb[k] = n0 * (med[k] / ref), any = true;
+    return any ? nb : std::vector<double>{};
+}
+
+// cpm._tone_gain: tone_metric as E * gain - offset. One N0 (gain, off empty): the square law's
+// scale = Es / (N0 (N0 + Es)), the codeword's Es, N0 plus the spill. Per-tone floors (tone_floors):
+// gain[k] = Es / (N_k (N_k + Es)), off[k] = ln(1 + Es / N_k).
+struct ToneGain {
+    double scale = 0.0;
+    std::vector<double> gain, off;
+    bool flat() const { return gain.empty(); }
+    double at(double e, std::size_t k) const { return flat() ? e * scale : e * gain[k] - off[k]; }
+};
+
+ToneGain tone_gain(const Mat<double>& E) {
     const auto top = row_max(E);
     const double mtop = np_mean(top);
     double n0 = median_rest(E) / std::numbers::ln2;  // exponential: median = N0 ln 2
     n0 = std::max(n0, 1e-12 * mtop + 1e-300);
+    ToneGain out;
+    auto nb = tone_floors(E, n0);
+    if (!nb.empty()) {
+        Mat<double> Ew(E.rows, E.cols);  // whitened, for Es and the spill
+        for (std::size_t r = 0; r < E.rows; ++r)
+            for (std::size_t k = 0; k < E.cols; ++k) Ew[r][k] = E[r][k] * (n0 / nb[k]);
+        const double es = std::max(np_mean(row_max(Ew)) - n0, 1e-3 * n0);
+        const double sp = spill(Ew, n0, es) * es;
+        out.gain.resize(E.cols);
+        out.off.resize(E.cols);
+        for (std::size_t k = 0; k < E.cols; ++k) {
+            const double n = nb[k] + sp;
+            out.gain[k] = es / (n + es) / n;
+            out.off[k] = std::log1p(es / n);
+        }
+        return out;
+    }
     const double es = std::max(mtop - n0, 1e-3 * n0);
     n0 += spill(E, n0, es) * es;
-    return es / (n0 + es) / n0;
+    out.scale = es / (n0 + es) / n0;
+    return out;
+}
+
+// cpm.tone_metric where a tone has a floor of its own (one N0: E * scale, left to the callers).
+Mat<double> tone_metric(const Mat<double>& E, const ToneGain& tg) {
+    Mat<double> G(E.rows, E.cols);
+    for (std::size_t r = 0; r < E.rows; ++r)
+        for (std::size_t k = 0; k < E.cols; ++k) G[r][k] = tg.at(E[r][k], k);
+    return G;
 }
 
 }  // namespace
 
 std::vector<double> symbol_ll(const Grid& g, const Mat<double>& E) {
-    const double scale = metric_scale(E);
+    const ToneGain tg = tone_gain(E);
     const auto gr = gray(g.m);
     std::vector<double> out(E.rows * g.m);
     for (std::size_t r = 0; r < E.rows; ++r)
-        for (int v = 0; v < g.m; ++v) out[r * g.m + v] = E[r][gr[v]] * scale;
+        for (int v = 0; v < g.m; ++v) out[r * g.m + v] = tg.at(E[r][gr[v]], gr[v]);
     return out;
 }
 
-std::vector<double> llrs(const Grid& g, const Mat<double>& E) { return bit_llrs(g, E, metric_scale(E)); }
+std::vector<double> llrs(const Grid& g, const Mat<double>& E) {
+    const ToneGain tg = tone_gain(E);
+    return tg.flat() ? bit_llrs(g, E, tg.scale) : bit_llrs(g, tone_metric(E, tg));
+}
 
 // cpm.bit_llrs: (n_sym, m) tone log-likelihoods (metric * scale) -> llrs's coded-bit LLRs (their marginals).
 std::vector<double> bit_llrs(const Grid& g, const Mat<double>& metric, double scale) {
@@ -489,13 +655,14 @@ std::int64_t hdr_span(const Grid& g, int copies) {
 }
 
 Mat<double> tone_llr(const Grid& g, const Mat<double>& E) {
-    const double scale = metric_scale(E), lm = std::log(static_cast<double>(g.m));
+    const ToneGain tg = tone_gain(E);
+    const double lm = std::log(static_cast<double>(g.m));
     const double keep = std::log1p(-tables::CPM.llr_eps), floor_ = std::log(tables::CPM.llr_eps);
     Mat<double> L(E.rows, E.cols);
     for (std::size_t r = 0; r < E.rows; ++r) {
-        double tot = E[r][0] * scale;  // np.logaddexp.reduce: left to right
-        for (std::size_t k = 1; k < E.cols; ++k) tot = logaddexp(tot, E[r][k] * scale);
-        for (std::size_t k = 0; k < E.cols; ++k) L[r][k] = logaddexp(keep + (E[r][k] * scale - tot + lm), floor_);
+        double tot = tg.at(E[r][0], 0);  // np.logaddexp.reduce: left to right
+        for (std::size_t k = 1; k < E.cols; ++k) tot = logaddexp(tot, tg.at(E[r][k], k));
+        for (std::size_t k = 0; k < E.cols; ++k) L[r][k] = logaddexp(keep + (tg.at(E[r][k], k) - tot + lm), floor_);
     }
     return L;
 }
@@ -592,7 +759,8 @@ double peak_ratio(const Grid& g, std::span<const double> x, std::int64_t s0, dou
 }
 
 std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional<double> threshold, double reach_hz,
-                         bool front_only, std::int64_t lo, std::optional<std::int64_t> hi, bool wait) {
+                         bool front_only, std::int64_t lo, std::optional<std::int64_t> hi, bool wait,
+                         const CoarseTrack* track, std::int64_t x0) {
     const double floor = threshold.value_or(g.sync_threshold);
     const std::int64_t len = static_cast<std::int64_t>(x.size()), T = g.T;
     const Layout L0 = layout(g, stream_symbols(g, 0, false));
@@ -600,17 +768,26 @@ std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional
     if (lo || hi) {
         const std::int64_t span = ((front_only ? L0.sync_rows[L0.front - 1] : L0.sync_rows.back()) + 2) * T;
         const std::int64_t a = std::min(len, std::max<std::int64_t>(0, lo - T)), b = hi ? std::min(len, *hi + span + T) : len;
-        d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), reach_hz, true, front_only, 0, floor);
+        d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), reach_hz, true, front_only, 0, floor, false, track,
+                   x0 + a);
         d.start += a;
         if (!(lo <= d.start && d.start < hi.value_or(len))) return std::nullopt;
     } else {
-        d = detect(g, x, reach_hz, true, front_only, 0, floor);
+        d = detect(g, x, reach_hz, true, front_only, 0, floor, false, track, x0);
     }
     if (d.score < floor) return std::nullopt;
     if (d.start + hdr_span(g, 1) > len) return std::nullopt;  // its header copy is still arriving
     if (d.start < 0) return std::nullopt;  // its front is cut off
     if (threshold) return make_lock(g, d.start, d.cfo, d.score, read_header(g, x, d.start, d.cfo, 1), 1);
-    const auto [h, ok] = lock_header(g, x, d.start, d.cfo, 1);
+    std::optional<std::pair<Header, bool>> got;
+    if (track)
+        for (const auto& m : track->header_memo)
+            if (m.s == x0 + d.start && m.cfo == d.cfo) got = {m.h, m.ok};
+    if (!got) {
+        got = lock_header(g, x, d.start, d.cfo, 1);
+        if (track) track->header_memo.push_back({x0 + d.start, d.cfo, got->first, got->second});
+    }
+    const auto [h, ok] = *got;
     if (ok) return make_lock(g, d.start, d.cfo, d.score, h, 1);
     if (h.front < g.wait_llr) return std::nullopt;  // noise, or a burst's data or a later sync block, its front missed
     // a front, its first header copy faded: both copies, once the second is in
@@ -626,12 +803,13 @@ std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional
 }
 
 std::optional<Lock> find_mid(const Grid& g, std::span<const double> x, std::int64_t lo,
-                             std::optional<std::int64_t> hi) {
+                             std::optional<std::int64_t> hi, const CoarseTrack* track, std::int64_t x0) {
     const std::int64_t T = g.T, nb = static_cast<std::int64_t>(g.mid_block.size()),
                        len = static_cast<std::int64_t>(x.size());
     const std::int64_t a = std::min(len, std::max<std::int64_t>(0, lo - T)),
                        b = hi ? std::min(len, *hi + (nb + 1) * T) : len;
-    Detection d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), 150.0, true, false, 0, g.mid_threshold, true);
+    Detection d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), 150.0, true, false, 0, g.mid_threshold, true,
+                         track, x0 + a);
     d.start += a;
     if (d.score < g.mid_threshold || !(lo <= d.start && d.start < hi.value_or(len))) return std::nullopt;
     if (d.start + (nb + g.hdr_len) * T > len) return std::nullopt;  // its second header copy is still arriving
@@ -753,9 +931,11 @@ std::optional<Lock> late_lock(const Grid& g, std::span<const double> x, const Lo
 // data2g.cpm.spread: Doppler spread from the winning tone's energy, a
 // least-squares fit of log c(k) = a - b k^2 over the lags 1.. whose
 // autocovariance holds up; with none, too fast or no fading by the excess
-// variance (constants: cpm.py's SPREAD_*).
-static double spread(const Grid& g, const std::vector<double>& top, double n0) {
+// variance, unless the symbols on the same or adjacent winning tones (`tones`)
+// are correlated: slow selective fading, unmeasured (constants: cpm.py's SPREAD_*).
+static double spread(const Grid& g, const std::vector<double>& top, double n0, const std::vector<int>& tones) {
     constexpr int LAGS = 8;
+    constexpr double NEAR_Z = 2.0, NEAR_S0 = 0.08, NEAR_S1 = 0.16;  // cpm.SPREAD_NEAR_S
     constexpr std::size_t MIN_SYMS = 16;
     constexpr double KEEP = 0.05, MAX_HZ = 12.0, UNMEASURED_HZ = 2.0, EXCESS_MIN = 0.2, SIG = 2.5, EXCESS_FIT = 0.05;
     const std::size_t n = top.size();
@@ -777,7 +957,24 @@ static double spread(const Grid& g, const std::vector<double>& top, double n0) {
     while (excess >= EXCESS_FIT && c[0] > SIG / std::sqrt(static_cast<double>(n)) * v && m < LAGS &&
            c[m] > KEEP * c[0])
         ++m;
-    if (m < 2) return excess >= EXCESS_MIN ? MAX_HZ : 0.0;
+    if (m < 2) {
+        if (excess < EXCESS_MIN) return 0.0;
+        // cpm._slow_by_near_tones
+        double num = 0.0;
+        std::size_t pairs = 0;
+        // cpm._near_lags: the pairs NEAR_S0..NEAR_S1 apart in time
+        const auto lag0 = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(NEAR_S0 * g.rate - 1e-9)));
+        const auto lag1 = static_cast<std::size_t>(std::floor(NEAR_S1 * g.rate + 1e-9));
+        for (std::size_t lag = lag0; lag <= lag1 && lag < n; ++lag) {
+            std::vector<double> p;
+            for (std::size_t i = 0; i + lag < n; ++i)
+                if (std::abs(tones[i + lag] - tones[i]) <= 1) p.push_back(t[i + lag] * t[i]);
+            num += np_sum(p);
+            pairs += p.size();
+        }
+        const double np_ = static_cast<double>(pairs);
+        return pairs > 0 && v > 0 && num / np_ / v * std::sqrt(np_) > NEAR_Z ? UNMEASURED_HZ : MAX_HZ;
+    }
     std::vector<double> x(m), y(m);
     for (int i = 0; i < m; ++i) {
         x[i] = static_cast<double>((i + 1) * (i + 1));
@@ -799,10 +996,37 @@ Measure measure(const Grid& g, const Mat<double>& E, int n_sym) {
     Measure out;
     out.snr.resize(top.size());
     for (std::size_t i = 0; i < top.size(); ++i) out.snr[i] = std::max(top[i] / n0 - 1, 1e-6);
-    const double mtop = np_mean(top);
-    const double es = std::max(mtop - n0, 1e-12);
-    out.spread_est = spread(g, top, n0);
-    out.snr_est = 10 * std::log10(es / n0 * g.rate / config::SNR_REF_BW_HZ);
+    double es_n0 = std::max(np_mean(top) - n0, 1e-12) / n0;
+    // a carrier: for snr_est only, every tone scaled down to the quietest quarter's floor and Es back up
+    // by the share kept (cpm.measure); the per-symbol snr and the spread stay as read
+    if (!tone_floors(E, n0).empty()) {
+        std::vector<double> med(E.cols), col(E.rows);
+        for (std::size_t k = 0; k < E.cols; ++k) {
+            for (std::size_t r = 0; r < E.rows; ++r) col[r] = E[r][k];
+            med[k] = np_median(col);
+        }
+        std::vector<double> s = med;  // np.quantile(med, 0.25), linear
+        std::sort(s.begin(), s.end());
+        const double pos = 0.25 * static_cast<double>(s.size() - 1);
+        const std::size_t lo = static_cast<std::size_t>(pos);
+        const double q = lo + 1 < s.size() ? s[lo] + (pos - static_cast<double>(lo)) * (s[lo + 1] - s[lo]) : s[lo];
+        std::vector<double> sc(E.cols);
+        for (std::size_t k = 0; k < E.cols; ++k) sc[k] = q / std::max(med[k], q);
+        Mat<double> Ew(E.rows, E.cols);
+        for (std::size_t r = 0; r < E.rows; ++r)
+            for (std::size_t k = 0; k < E.cols; ++k) Ew[r][k] = E[r][k] * sc[k];
+        const double n0w = std::max(median_rest(Ew) / std::numbers::ln2, 1e-300);
+        es_n0 = std::max((np_mean(row_max(Ew)) - n0w) / np_mean(sc), 1e-12) / n0w;
+    }
+    std::vector<int> tones(E.rows);  // np.argmax: the first of equals
+    for (std::size_t r = 0; r < E.rows; ++r) {
+        std::size_t k = 0;
+        for (std::size_t j = 1; j < E.cols; ++j)
+            if (E[r][j] > E[r][k]) k = j;
+        tones[r] = static_cast<int>(k);
+    }
+    out.spread_est = spread(g, top, n0, tones);
+    out.snr_est = 10 * std::log10(es_n0 * g.rate / config::SNR_REF_BW_HZ);
     out.frames = std::max(1.0, static_cast<double>(n_sym * g.T) / config::FRAME_SAMPLES);
     return out;
 }
@@ -824,12 +1048,16 @@ std::pair<std::int64_t, double> refine(const Grid& g, std::span<const double> x,
     const Mat<double> E0 = energies(g, x, s0, n, cfo);
     const double tot = np_sum(E0.data.data(), E0.data.size());
     double w = 0.0;
+    ToneGain tg;  // per-tone floors: the tones' own gains and offsets in place of w
     if (tot > 0) {
-        const double scale = metric_scale(E0);
-        std::vector<double> G0(E0.data.size());
-        for (std::size_t i = 0; i < G0.size(); ++i) G0[i] = E0.data[i] * scale;
-        w = np_sum(G0) / tot;
+        tg = tone_gain(E0);
+        if (tg.flat()) {
+            std::vector<double> G0(E0.data.size());
+            for (std::size_t i = 0; i < G0.size(); ++i) G0[i] = E0.data[i] * tg.scale;
+            w = np_sum(G0) / tot;
+        }
     }
+    const auto sc = [&](double e, int k) { return tg.flat() ? e * w : e * tg.gain[k] - tg.off[k]; };
     const std::int64_t len = static_cast<std::int64_t>(x.size()), T = g.T, N = static_cast<std::int64_t>(n) * T;
     // the likelihood of mixed samples z (n symbols); the log-sum over tones max-shifted (numpy's
     // logaddexp.reduce rounds otherwise, within 1e-15: no tie it could break was seen)
@@ -837,12 +1065,16 @@ std::pair<std::int64_t, double> refine(const Grid& g, std::span<const double> x,
         const std::vector<cdouble> seg(z, z + N);
         const Mat<double> E = power(fft_rows(seg, n, T), n, T, g.m);
         std::vector<double> vk(kr.size()), vu(ur.size());
-        for (std::size_t i = 0; i < kr.size(); ++i) vk[i] = E[kr[i]][known[kr[i]]] * w;
+        for (std::size_t i = 0; i < kr.size(); ++i) vk[i] = sc(E[kr[i]][known[kr[i]]], known[kr[i]]);
         for (std::size_t i = 0; i < ur.size(); ++i) {
             const double* e = E[ur[i]];
-            const double mx = *std::max_element(e, e + g.m) * w;
+            double mx = *std::max_element(e, e + g.m) * w;
+            if (!tg.flat()) {
+                mx = sc(e[0], 0);
+                for (int k = 1; k < g.m; ++k) mx = std::max(mx, sc(e[k], k));
+            }
             double acc = 0.0;
-            for (int k = 0; k < g.m; ++k) acc += std::exp(e[k] * w - mx);
+            for (int k = 0; k < g.m; ++k) acc += std::exp(sc(e[k], k) - mx);
             vu[i] = mx + std::log(acc);
         }
         return np_sum(vk) + np_sum(vu);
@@ -973,9 +1205,8 @@ bool env_on(const char* name) {
     return !v || std::strcmp(v, "1") == 0;
 }
 
-double sq_abs(cdouble z) {  // numpy's abs(z) ** 2
-    const double a = std::hypot(z.real(), z.imag());
-    return a * a;
+double sq_abs(cdouble z) {  // cpm.py's _sq: re^2 + im^2
+    return z.real() * z.real() + z.imag() * z.imag();
 }
 
 Mat<double> power_of(const Mat<cdouble>& Z) {
@@ -1060,13 +1291,25 @@ Mat<double> coh_metric(const Mat<cdouble>& Z0, const Mat<double>& P, int W, doub
         p[i] = a[i + 1] * std::conj(a[i]) * c[i + 1] * c[i];
         d[i] = t[i + 1] - t[i];
     }
+    // the pairs summed per tone step d first (cpm.py: np.unique, np.add.at): the grid's phase depends on d alone
+    std::vector<cdouble> qd(2 * m - 1);
+    std::vector<char> seen(2 * m - 1, 0);
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const auto j = static_cast<std::size_t>(d[i] + static_cast<int>(m) - 1);
+        qd[j] += p[i];
+        seen[j] = 1;
+    }
+    std::vector<int> dv;
+    std::vector<cdouble> q;
+    for (std::size_t j = 0; j < qd.size(); ++j)
+        if (seen[j]) dv.push_back(static_cast<int>(j) - static_cast<int>(m) + 1), q.push_back(qd[j]);
     double delta = 0.0, best = -1.0;
     for (int k = 0; k < 401; ++k) {
         const double gk = k == 400 ? 0.5 : k * (1.0 / 400) + -0.5;  // np.linspace(-0.5, 0.5, 401)
         cdouble s = 0.0;
-        for (std::size_t i = 0; i < p.size(); ++i) {
-            const double th = (2 * PI) * (gk * d[i]);
-            s += cdouble(std::cos(th), std::sin(th)) * p[i];
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            const double th = (2 * PI) * (gk * dv[i]);
+            s += cdouble(std::cos(th), std::sin(th)) * q[i];
         }
         const double v = std::abs(s);
         if (v > best) best = v, delta = gk;
@@ -1102,6 +1345,23 @@ Mat<double> coh_metric(const Mat<cdouble>& Z0, const Mat<double>& P, int W, doub
         h[i] = v / static_cast<double>(std::max(cnt, 1));
     }
     std::vector<double> res(n), row(m);
+    {
+        Mat<double> E(n, m);
+        for (std::size_t r = 0; r < n; ++r)
+            for (std::size_t k = 0; k < m; ++k) E[r][k] = sq_abs(Z[r][k]);
+        const auto nb = tone_floors(E, n0);
+        if (!nb.empty()) {  // per-tone floors: Z_k = h_i + CN(0, N_k + s2) on the sent tone, CN(0, N_k) elsewhere
+            for (std::size_t r = 0; r < n; ++r) {
+                for (std::size_t k = 0; k < m; ++k) row[k] = P[r][k] * (sq_abs(Z[r][k] - h[r]) - nb[k]);
+                res[r] = np_sum(row);
+            }
+            const double s2 = std::max(np_mean(res), n0 * 1e-3);
+            for (std::size_t r = 0; r < n; ++r)
+                for (std::size_t k = 0; k < m; ++k)
+                    out[r][k] = E[r][k] / nb[k] - sq_abs(Z[r][k] - h[r]) / (nb[k] + s2) - std::log1p(s2 / nb[k]);
+            return out;
+        }
+    }
     for (std::size_t r = 0; r < n; ++r) {
         for (std::size_t k = 0; k < m; ++k) row[k] = P[r][k] * sq_abs(Z[r][k] - h[r]);
         res[r] = np_sum(row);
@@ -1176,12 +1436,12 @@ Mat<double> dd_metric(const Received& r, const Posts& post, int slot) {
     Mat<cdouble> Z(b - a, g.m);
     std::copy(r.Z[a], r.Z[b - 1] + g.m, Z.data.begin());
     const Mat<double> E = power_of(Z);
-    const double scale = metric_scale(E);
+    const ToneGain tg = tone_gain(E);
     Mat<double> P(E.rows, E.cols);
     for (std::size_t i = 0; i < E.rows; ++i) {  // the square law's probabilities
         double mx = -INFINITY;
-        for (int k = 0; k < g.m; ++k) mx = std::max(mx, E[i][k] * scale);
-        for (int k = 0; k < g.m; ++k) P[i][k] = std::exp(E[i][k] * scale - mx);
+        for (int k = 0; k < g.m; ++k) mx = std::max(mx, tg.at(E[i][k], k));
+        for (int k = 0; k < g.m; ++k) P[i][k] = std::exp(tg.at(E[i][k], k) - mx);
         const double s = np_sum(P[i], g.m);
         for (int k = 0; k < g.m; ++k) P[i][k] /= s;
     }

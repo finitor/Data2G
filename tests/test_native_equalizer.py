@@ -85,6 +85,7 @@ def test_pilot_path(native, py, band, n_p, kind, snr):
         assert a[2] == b[2]
         assert a[1] == pytest.approx(b[1], rel=RTOL)  # inf == inf on narrow bands
         close(a[3], b[3], "keep")
+        assert ne.snr_noise(h, b[0], b[1], b[2], sup, bb) == pytest.approx(py.snr_noise(h, b[0], b[1], b[2], sup, bb), rel=RTOL)
     assert ne.preamble_noise(reps) == pytest.approx(py.preamble_noise(reps), rel=RTOL)
     close(ne.preamble_noise_k(reps), py.preamble_noise_k(reps))
     kw = {"bb": bb, "n0_pre": py.preamble_noise(reps), "n0_pre_k": py.preamble_noise_k(reps)}
@@ -92,7 +93,7 @@ def test_pilot_path(native, py, band, n_p, kind, snr):
     assert set(got) == set(want)
     for k in ("h", "mse", "n0_k"):
         close(got[k], want[k], k)
-    for k in ("n0", "p_sig", "spread_hz", "filter_spread_hz"):
+    for k in ("n0", "n0_snr", "p_sig", "spread_hz", "filter_spread_hz"):
         assert got[k] == pytest.approx(want[k], rel=RTOL), k
     assert got["slack"] == want["slack"]
     steps = np.arange(n_p) * 0.37 - 3
@@ -176,9 +177,9 @@ def _capture(monkeypatch, name):
     return calls
 
 
-@pytest.mark.parametrize("submode,n_cw,snr", [("qpsk-r1/2", 3, 6.0), ("w48-qpsk-r1/2", 16, 10.0),
+@pytest.mark.parametrize("submode,n_cw,snr", [c for c in [("qpsk-r1/2", 3, 6.0), ("w48-qpsk-r1/2", 16, 10.0),
                                              ("n10-qpsk-r1/2", 2, 8.0), ("n4-qpsk-r1/2", 1, 10.0),
-                                             ("w48-16qam-r1/2", 5, 30.0)])
+                                             ("w48-16qam-r1/2", 5, 30.0)] if c[0] in SUBMODES])  # FM has no n4
 def test_live_estimate_and_refine(native, py, reference, monkeypatch, submode, n_cw, snr):
     # Python's receive, so its equalizer calls can be captured (--native
     # substitutes the whole of modem.receive)

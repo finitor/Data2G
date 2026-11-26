@@ -71,9 +71,54 @@ struct Detection {
     std::int64_t start;
     double cfo;
 };
-// mid: the mid block alone, its first sample for the start (find_mid).
+struct Header {
+    const Spec* spec;
+    int n_data;
+    bool dup;
+    double score, runner_up;
+    double front;  // the front block's part of score
+};
+// cpm.CoarseTrack: a streaming receiver's coarse detection rows of grid g as audio arrives, on the stream's
+// T/4 timing grid, so each hop's searches (find, find_mid) read them instead of transforming their windows again.
+class CoarseTrack {
+public:
+    explicit CoarseTrack(const Grid& g, double reach_hz = 150.0);
+    // buf holds stream samples off..: rows for its new whole symbols; rows of samples it no longer holds dropped
+    void feed(std::span<const double> buf, std::int64_t off);
+    // detect's per-phase (first symbol's sample from a, rows n x 4 nb) of the whole symbols in [a, b)
+    std::vector<std::pair<std::int64_t, Mat<double>>> rows(std::int64_t a, std::int64_t b) const;
+    int extra;  // bins searched each side of the grid (detect's reach)
+
+    // Native only, results unchanged: a stream re-searches the same candidate hop after hop on the same audio
+    // (60 s of noise: 44% of c16r25's fine searches, 24% of c8r50's), so detect's fine search of a coarse
+    // candidate (stream sample, CFO, which rows) and find's header reading of its result are kept while their
+    // audio is. Only entries whose whole span was in the buffer: zero-filled edges would differ.
+    struct FineMemo {
+        std::int64_t s;
+        double cfo;
+        bool front_only, mid;
+        Detection fine;  // start a stream sample
+    };
+    struct HeaderMemo {
+        std::int64_t s;
+        double cfo;
+        Header h;
+        bool ok;
+    };
+    mutable std::vector<FineMemo> fine_memo;
+    mutable std::vector<HeaderMemo> header_memo;
+
+private:
+    const Grid* g_;
+    std::array<std::optional<std::int64_t>, 4> s_{};  // per phase: the stream sample of its first row
+    std::array<std::vector<double>, 4> E_{};          // per phase: rows of 4 nb, flat
+};
+
+// mid: the mid block alone, its first sample for the start (find_mid). track: its rows for the coarse stage
+// (x the stream from sample x0).
 Detection detect(const Grid& g, std::span<const double> x, double reach_hz = 150.0, bool fine = true,
-                 bool front_only = false, int n_sym = 0, double floor = -1.0, bool mid = false);
+                 bool front_only = false, int n_sym = 0, double floor = -1.0, bool mid = false,
+                 const CoarseTrack* track = nullptr, std::int64_t x0 = 0);
 
 // (n_sym, m) energies of one codeword -> n_sym * bits LLRs, mapping order (the control codeword's).
 std::vector<double> llrs(const Grid& g, const Mat<double>& E);
@@ -85,13 +130,6 @@ std::vector<double> symbol_ll(const Grid& g, const Mat<double>& E);
 // cpm.tone_llr: per row and tone, that tone's log-likelihood ratio against a random one (floored by llr_eps).
 Mat<double> tone_llr(const Grid& g, const Mat<double>& E);
 
-struct Header {
-    const Spec* spec;
-    int n_data;
-    bool dup;
-    double score, runner_up;
-    double front;  // the front block's part of score
-};
 Header read_header(const Grid& g, std::span<const double> x, std::int64_t s0, double cfo, int copies = 2);
 
 struct Soft {
@@ -119,14 +157,16 @@ struct Lock {
 // wait: a candidate instead of nullopt while the second header copy is still arriving.
 std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional<double> threshold = std::nullopt,
                          double reach_hz = 150.0, bool front_only = true, std::int64_t lo = 0,
-                         std::optional<std::int64_t> hi = std::nullopt, bool wait = false);
+                         std::optional<std::int64_t> hi = std::nullopt, bool wait = false,
+                         const CoarseTrack* track = nullptr, std::int64_t x0 = 0);
 // find's candidate (x holding its header_end) -> its lock from both header copies
 // (lock_llr2, hdr_margin2), or nullopt.
 std::optional<Lock> late_lock(const Grid& g, std::span<const double> x, const Lock& cand);
 // A burst whose front was missed, from its mid block and both header copies
 // (cpm.find_mid): the mid block's start in [lo, hi). hi: nullopt = len(x).
 std::optional<Lock> find_mid(const Grid& g, std::span<const double> x, std::int64_t lo = 0,
-                             std::optional<std::int64_t> hi = std::nullopt);
+                             std::optional<std::int64_t> hi = std::nullopt, const CoarseTrack* track = nullptr,
+                             std::int64_t x0 = 0);
 // cpm.confirm: a lock's second look, tone_llr over its mid block and second
 // header copy at the locked word, unfloored; under CONFIRM_LLR the burst is
 // not there (receiver::Receiver lets an early lock go). confirm_end: one past
@@ -187,6 +227,7 @@ Received receive_refined(std::span<const double> x, const Lock& lock, std::pair<
 // h = 1, continuous phase: every symbol starts at the same carrier phase. A
 // channel estimate per row from its neighbours' known or decided tones makes
 // the metric coherent; a poor estimate falls back to the square law.
+inline constexpr double FLOOR_SIGMAS = 6.0;  // cpm.FLOOR_SIGMAS: tone_floors' bar over the common N0
 inline constexpr int COH_W = 8;      // coh_metric's window for slots (+- rows, the row left out)
 inline constexpr int COH_HDR_W = 4;  // the header's
 // cpm.COH_LOCK: the grid's coherent lock gates (score one copy, both; margin

@@ -17,10 +17,12 @@ class QSettings;
 
 namespace data2g::app {
 
-// The config file, an ini: --config's on this command line, else (config
-// dir)/Data2G/data2g.conf. Sets the file settings_store() opens from then on.
-// Without --config and with no data2g.conf yet, the store older versions
-// saved (Data2G/data2g-gui) moves to it.
+// The config file, an ini: --config's on this command line, else a
+// data2g.conf beside the program if there is one (it needs the
+// QCoreApplication), else (config dir)/Data2G/data2g.conf. Sets the file
+// settings_store() opens from then on. With neither of the first two and no
+// data2g.conf in the config dir yet, the store older versions saved
+// (Data2G/data2g-gui) moves to it.
 std::unique_ptr<QSettings> open_config(int argc, char** argv);
 // The file open_config() chose (the default one before it runs).
 // Each front end's own keys live under a group: gui/, web/.

@@ -15,6 +15,7 @@
 #include <fstream>
 #include <random>
 #include <cstdlib>
+#include <vector>
 
 #include "arq/engine.hpp"
 #include "constellation/constellation.hpp"
@@ -27,6 +28,10 @@ using namespace data2g::arq;
 using clk = std::chrono::steady_clock;
 
 namespace {
+
+// the engine's TX scale (arq/phy full_scale): HF, peak 1.0 (~unit RMS again x 2.2 after the clipper);
+// FM, unit RMS over config::FM_TX_PEAK
+constexpr double LINK_G = config::PROFILE == "hf" ? 2.2 : config::FM_TX_PEAK;
 
 constexpr int BLOCK = config::FS / 10;
 // Sanitizers slow everything several-fold: wall-clock latency bounds are off.
@@ -45,9 +50,9 @@ bool link(Engine& a, Engine& b, double snr_db, double seconds, const std::functi
     std::vector<double> ao(BLOCK, 0.0), bo(BLOCK, 0.0), x(BLOCK);
     const auto t0 = clk::now();
     for (int i = 0; i < static_cast<int>(seconds * 10); ++i) {
-        for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * bo[j] + noise(rng);
+        for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * bo[j] + noise(rng);
         ao = a.step(x).audio;
-        for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * ao[j] + noise(rng);
+        for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * ao[j] + noise(rng);
         bo = b.step(x).audio;
         if (until()) return true;
         if (paced) std::this_thread::sleep_until(t0 + std::chrono::milliseconds(100 * (i + 1)));
@@ -246,6 +251,44 @@ void noise_rule_config() {
     check::is_true(!rule(0.0), "0: off");
 }
 
+// DD's turnaround budget: my own t_turn (what I advertise; the peer's reply timers allow it) past the burst's
+// end, less PTT, TX latency and the time since the block came in; the dd_budget_s cap; none outside a session.
+// The time since the block is fixed at 0.05 s: a sanitizer build's steps take long enough to spend a real one.
+class BudgetEngine : public Engine {
+public:
+    using Engine::Engine;
+    using Engine::dd_budget;
+
+protected:
+    double since_block() const override { return 0.05; }
+};
+
+void turnaround_budget() {
+    check::current_step = "turnaround budget";
+    EngineConfig c;
+    c.dd_budget_s = 5.0;
+    BudgetEngine e("W1AW", c), b("K2XYZ", c);
+    check::is_true(e.dd_budget(10.0, 10.3) == std::optional(5.0), "idle: the cap");
+    b.listen();  // a new session: its t_turn after (a slow station's longer turnaround)
+    b.session().t_turn = 2.0;
+    e.connect("K2XYZ", 2);
+    check::is_true(link(e, b, 12, 60, [&] { return both(e, b, SessionState::CONNECTED); }, 0), "connected");
+    check::is_true(e.session().peer_turn() == 2.0 && b.session().peer_turn() == 1.0, "each times the other's t_turn");
+    for (auto* s : {&e, &b}) {
+        s->set_tx_latency(0.2);
+        s->set_ptt_delay(0.1);
+    }
+    const double le = e.dd_budget(10.0, 10.3).value_or(-1);  // its own 1.0 - 0.3 - 0.2 - 0.1 - 0.05
+    const double lb = b.dd_budget(10.0, 10.3).value_or(-1);  // its own 2.0 - 0.6 - 0.05
+    check::is_true(std::abs(le - 0.35) < 1e-9, "what my own turn leaves");
+    check::is_true(std::abs(lb - 1.35) < 1e-9, "a slow station's own turn");
+    check::is_true(e.dd_budget(10.0, 12.0) == std::optional(0.0), "past the deadline: none");
+    EngineConfig u;
+    u.dd_budget_s = std::nullopt;
+    BudgetEngine unlimited("W1AW", u);
+    check::is_true(!unlimited.dd_budget(10.0, 10.3), "no limit (studies) stays none");
+}
+
 // The host's nods setting (--no-nods): the next session's stations, never one in progress.
 void nods_setting() {
     check::current_step = "nods setting";
@@ -421,6 +464,14 @@ void worker_backlog() {
             while (processed < static_cast<int>(i - e.decode_dropped() / BLOCK) && clk::now() - t0 < std::chrono::seconds(60))
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
+        if (i > release) {
+            // after it, no faster than the worker keeps up (real audio comes at 1x): fed flat out, a slow
+            // runner's worker (macOS arm64, FM's 16 kHz) fell past the 2 s bound again and lost the 2nd burst
+            const auto t0 = clk::now();
+            const int ahead = config::FS / BLOCK;  // 1 s of blocks, under the bound
+            while (processed + ahead < static_cast<int>(i - e.decode_dropped() / BLOCK) && clk::now() - t0 < std::chrono::seconds(60))
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
         e.step(std::span<const double>(y).subspan(i * BLOCK, BLOCK));
     }
     const double dropped_s = static_cast<double>(e.decode_dropped()) / config::FS;
@@ -475,7 +526,10 @@ void worker_session() {
 // them by its end. OFDM: each frame equalized on its own, close to the points on a clean channel;
 // CPM: the same tone shares the decode reads. Off: no previews.
 void live_preview() {
-    for (const char* name : {"qpsk-r1/5", "fsk8r50-r1/2"}) {
+    // FM's engine listens for no CPM grid (no CPM modes, plan Q2)
+    const std::vector<const char*> names =
+        config::PROFILE == "fm" ? std::vector<const char*>{"qpsk-r1/5"} : std::vector<const char*>{"qpsk-r1/5", "fsk8r50-r1/2"};
+    for (const char* name : names) {
         check::current_step = "live preview";
         TxBurst burst;
         burst.submode = name;
@@ -568,6 +622,7 @@ int main() {
     tx_burst_and_abort();
     noise_rule_config();
     nods_setting();
+    turnaround_budget();
     sync_session(dir);
     sync_kiss();
     worker_latency();

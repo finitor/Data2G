@@ -9,12 +9,12 @@ def substitutions(native):
     phy.DD when made, and its store stays the caller's dict."""
     import time
 
-    from data2g import codes, kisslink
+    from data2g import codes, kisslink, modem
     from data2g.arq import modes
     from data2g.arq import phy as PHY
 
     P, K = native.phy, native.kisslink
-    py_rx, py_tx, py_soft, py_measure = PHY.ModemRx, PHY.tx_audio, PHY.soft_bits, PHY.measure
+    py_rx, py_tx, py_soft, py_measure, py_data_mer = PHY.ModemRx, PHY.tx_audio, PHY.soft_bits, PHY.measure, PHY.data_mer
     watched = ("decode_raw", "decode_buffer", "decode_buffer_raw", "decode_posterior", "decode_llrs", "payloads", "check", "combine", "flip",
                "encode", "encode_info", "descramble")
 
@@ -45,6 +45,10 @@ def substitutions(native):
         def decode(self, slot, mask_id, rv, key):
             return self._n.decode(slot, mask_id, rv, key)
 
+        def advance(self, r, budget_s=None):
+            self.r = r
+            return self._n.advance(r, budget_s)
+
         def raw(self, slot):
             return self._n.raw(slot)
 
@@ -66,8 +70,13 @@ def substitutions(native):
         def forget(self, key):
             return self._n.forget(key)
 
-    def tx_audio(burst):
-        return P.tx_audio(burst) if burst.submode in modes.MODES else py_tx(burst)
+        def measure_data(self, measured):
+            return self._n.measure_data(measured)
+
+    def tx_audio(burst, tx_path=None, level=None):
+        # tx_path None: Python's station setting (modem.TX_PATH), as the modulate substitution reads it
+        return (P.tx_audio(burst, tx_path or modem.TX_PATH, level) if burst.submode in modes.MODES
+                else py_tx(burst, tx_path=tx_path, level=level))
 
     def soft_bits(r):
         return P.soft_bits(r) if own(r["spec"]) else py_soft(r)
@@ -90,6 +99,7 @@ def substitutions(native):
         (PHY, "tx_audio"): tx_audio,
         (PHY, "soft_bits"): soft_bits,
         (PHY, "measure"): measure,
+        (PHY, "data_mer"): lambda r, coded_bits, measured: P.data_mer(r, coded_bits, measured) if own(r["spec"]) else py_data_mer(r, coded_bits, measured),
         (PHY, "ModemRx"): ModemRx,
         (kisslink, "parse_ax25"): parse_ax25,
         (kisslink, "station_hash"): K.station_hash,

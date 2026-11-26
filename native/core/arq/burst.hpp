@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "arq/frames.hpp"
+#include "arq/measured.hpp"
 
 namespace data2g::arq {
 
@@ -57,6 +58,8 @@ struct TxBurst {
     // sent as a nod (docs/arq.md §3b): its meaning and family key (session key, direction, burst seq mod 8,
     // acted-on); the slots hold the control it stands for
     std::optional<std::pair<int, std::array<int, 4>>> nod{};
+    double level = 1.0;  // audio level against the mode's own (an FM ping: its top modes', arq/ping)
+    bool probe = false;  // FM: the sounding probe follows on the same PTT (arq/probe; a ping)
 };
 using TxBurstPtr = std::shared_ptr<const TxBurst>;
 
@@ -115,6 +118,8 @@ public:
     virtual int n_ctl_slots() const { return 0; }
     // A nod (docs/arq.md §3b) standing for a control-only burst: checked as a primed control is.
     virtual bool is_nod() const { return false; }
+    // Post-decode data-aided MER refinement of the burst's measurements (ModemRx::measure_data; nullopt: unsupported).
+    virtual std::optional<Measured> measure_data(const Measured&) { return std::nullopt; }
 };
 
 }  // namespace data2g::arq

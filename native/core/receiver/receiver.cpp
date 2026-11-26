@@ -135,6 +135,32 @@ void run(StreamFeed& f) {
     if (f.stream) f.stream->feed(f.audio);
 }
 
+std::optional<modem::Received> receive_partial(const PartialRequest& req, const modem::Accept& accept) {
+    const std::string_view band[] = {req.header.ofdm().band};
+    try {
+        return modem::receive(req.seg, band, &accept, std::min<int64_t>(req.head, static_cast<int64_t>(req.seg.size())),
+                              nullptr, true);
+    } catch (const modem::SyncError&) {
+        return std::nullopt;
+    }
+}
+
+// receiver.Receiver._partial: with a window's frames more of a pending OFDM burst in since the last look, its
+// audio so far. Copy locks (preamble lost) wait for the end.
+void Receiver::partial(std::vector<Item>& out, const Pending& p) {
+    if (!decode_early || !config::SPREAD_WINDOW || p.is_cpm() || p.copy()) return;
+    const int64_t now = off_ + len();
+    if (!inc_ || inc_->start != p.start()) {
+        inc_ = Inc{p.start(), now, 0};
+        return;
+    }
+    if (now - inc_->fed < int64_t{config::SPREAD_WINDOW} * config::FRAME_SAMPLES) return;
+    inc_->fed = now;
+    const int64_t s0 = std::max<int64_t>(0, p.start() - MARGIN - off_);
+    out.push_back(PartialRequest{p, std::vector<double>(buf_.begin() + s0, buf_.end()), off_ + s0,
+                                 p.start() - off_ - s0 + modem::receive_head(p.ofdm().band), inc_->ready});
+}
+
 Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids, bool blank)
     : accept_(std::move(accept)), bands_(accept_.bands()) {
     for (const auto g : cpm_grids) grids_.push_back(&grid_named(g));
@@ -147,7 +173,11 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
     detectors_.reserve(bands_.size());
-    for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
+    for (const auto b : bands_) {  // matched filter outputs kept only where find_copy reads them
+        const bool copy = std::find(config::HEADER_COPY_BANDS.begin(), config::HEADER_COPY_BANDS.end(), b) !=
+                          config::HEADER_COPY_BANDS.end();
+        detectors_.push_back({b, waveform::StreamDetector(waveform::band(b), config::ACQUIRE_REACH_HZ, copy)});
+    }
     if (blank) blanker_.emplace();
     reset();
 }
@@ -157,6 +187,7 @@ void Receiver::reset() {
     off_ = 0;
     pending_.reset();
     stream_.reset();
+    inc_.reset();
     pilots_ok_ = confirmed_ = false;
     dark_ = 0;
     looked_ = false;
@@ -167,6 +198,8 @@ void Receiver::reset() {
     last_start_ = -1;
     decided_.clear();
     decided_mid_.clear();
+    coarse_.clear();
+    for (const auto* g : grids_) coarse_.emplace(g->name, cpm::CoarseTrack(*g));
     cpm_wait_.clear();
     expected_.reset();
     for (auto& d : detectors_) {
@@ -284,6 +317,10 @@ Receiver::Stats Receiver::stats(int64_t w0) {
         const int64_t lo = off_ + w0;
         // only the starts not yet decided: the rest of the window (most of it) would be all -1
         const int64_t masked = std::clamp<int64_t>(decided(band) - lo, 0, n);
+        if (d.peak(lo + masked, lo + n) < waveform::band(band).preamble_threshold()) {
+            out.v.push_back({band, nullptr, masked, true});  // acquire would find nothing: no matrix built
+            continue;
+        }
         out.mats.push_back(d.stat(lo + masked, lo + n));
         out.v.push_back({band, &out.mats.back(), masked});
     }
@@ -362,8 +399,10 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
         if (auto lock = cpm::late_lock(*w.g, buf_, c)) return lock;
     }
     for (const auto* g : grids_) {
+        auto& track = coarse_.at(g->name);
+        track.feed(buf_, off_);
         auto lock = cpm::find(*g, buf_, std::nullopt, 150.0, true, std::max<int64_t>(0, decided(g->name) - off_),
-                              len() - grid_span(*g) + 2 * g->T, true);
+                              len() - grid_span(*g) + 2 * g->T, true, &track, off_);
         if (!lock) continue;
         if (!lock->wait) return lock;
         lock->start += off_;
@@ -377,7 +416,8 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
     }
     for (const auto* g : grids_) {  // the front missed: the mid block and both header copies
         const auto lock = cpm::find_mid(*g, buf_, std::max<int64_t>(0, decided_mid(*g) - off_),
-                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T);
+                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T,
+                                        &coarse_.at(g->name), off_);
         if (lock) return lock;
     }
     return std::nullopt;
@@ -486,7 +526,13 @@ std::vector<Event> Receiver::feed(std::span<const double> x) {
         if (auto* r = std::get_if<DecodeRequest>(&it)) out.emplace_back(decode(std::move(*r), accept_));
         else if (auto* h = std::get_if<HeaderEvent>(&it)) out.emplace_back(std::move(*h));
         else if (auto* f = std::get_if<StreamFeed>(&it)) run(*f);
-        else out.emplace_back(std::move(std::get<BurstEvent>(it)));
+        else if (auto* q = std::get_if<PartialRequest>(&it)) {
+            auto r = receive_partial(*q, accept_);
+            if (!r) continue;
+            const int ready = static_cast<int>(modem::ready_slots(*r).size());
+            if (inc_ && inc_->start == q->header.start()) inc_->ready = std::max(inc_->ready, ready);
+            if (ready > q->ready_before) out.emplace_back(PartialEvent{q->header, std::move(*r)});  // groups newly complete
+        } else out.emplace_back(std::move(std::get<BurstEvent>(it)));
     }
     return out;
 }
@@ -576,6 +622,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
         }
         const Pending p = *pending_;
         if (off_ + len() < p.end() + MARGIN) {
+            partial(out, p);
             if (fresh_ >= HOP) {
                 check_pilots();
                 // the later-header search is for false locks: a confirmed burst skips it

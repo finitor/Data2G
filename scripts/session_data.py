@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from data2g import agc as AGC
 from data2g import hfchannel as HC
 from data2g import interference as INTF
 from data2g.arq import policy as G
@@ -80,6 +81,14 @@ FLOOR = False
 # pilot row per 144 ms) while CPM control still decodes, which the regular
 # kinds never show the model.
 SEVERE = False
+# --short: flat or slow channels at 0..15 dB with small chat/winlink traffic,
+# so most bursts are control-only replies measured on short bursts. On air
+# (#261) 22% of outcome rows sat at snr_est 5..15, spread_est < 0.1 with ack
+# replies measured on 2-8 frame bursts; the bulk kinds put ~4% of rows there,
+# mostly measured on 70-80 frame data bursts. AWGN 40%, MPG 30%, else Doppler
+# 0.01-0.1 Hz and 0-2 ms; SNR 0..15 dB, drifting as regular; 300 s, linksim's
+# chat (10 messages, 50-200 B, 5-30 s apart) or winlink workload, half each.
+SHORT = False
 KINDS_ONLY = ()  # --kinds: only these channel kinds (outcome_data.KINDS names); with --high, AWGN allowed
 MEAS = ["snr_est", "spread_est", "delay_est_ms", "headroom", "frames"] + [f"mi_{c}" for c in P.CONSTS]
 FIELDS = (["seed", "kind", "doppler", "delay_ms", "snr", "snr_next", "cap", "band", "gap"] + MEAS
@@ -96,6 +105,10 @@ FIELDS = FIELDS + NOISE_COLS + ["intf"] + LINK_COLS + ENERGY_COLS + HIST_COLS
 # --interference [DRAWS]: each station's interference drawn from data2g.interference.draw()
 INTERFERENCE = None
 WANDER_DB = 0.0  # --wander: each station's floor wanders (phy_session.ContinuousChannel)
+# --agc: each station's receiver AGC drawn from data2g.agc.draw() (none to a bit more than
+# two volunteer nodes showed on air, issue #257); off: no AGC, as before
+AGC_ON = False
+FIELDS = FIELDS + ["agc"]
 
 
 class Explorer(G.GearShifter):
@@ -174,6 +187,7 @@ class DataPhy(LS.AuditPhy):
             if snap.get("hist"):
                 row.update(zip(HIST_COLS, (round(v, 4) for v in snap["hist"][:3])))
             row["intf"] = INTF.describe(self.ch.intf[1 - (burst.slots[0].mask_id[1] & 1)].spec)
+            row["agc"] = AGC.describe(self.ch.agc[1 - (burst.slots[0].mask_id[1] & 1)])
             self.out.append(row)
         return res
 
@@ -190,20 +204,26 @@ def session(seed):
         kinds = [k for k, _ in O.KINDS]
         ws = np.array([w for _, w in O.KINDS])
         kind = str(rng.choice(kinds, p=ws / ws.sum()))
-        doppler, delay = (PS.L.PRESETS[kind] if kind != "random"
+        doppler, delay = (PS.PRESETS[kind] if kind != "random"
                           else (float(np.exp(rng.uniform(np.log(0.05), np.log(3.0)))), float(rng.uniform(0, 5))))
         snr0, drift = float(rng.uniform(-19, -4)), 0.0
     elif FASTLOW:
         u = rng.random()
         kind = "mpp" if u < 0.35 else "mpd" if u < 0.7 else "random"
-        doppler, delay = (PS.L.PRESETS[kind] if kind != "random"
+        doppler, delay = (PS.PRESETS[kind] if kind != "random"
                           else (float(np.exp(rng.uniform(np.log(1.0), np.log(3.0)))), float(rng.uniform(0, 5))))
         snr0, drift = float(rng.uniform(-8, 6)), 0.0
     elif SLOW:
         kind = "mpg" if rng.random() < 0.7 else "random"
-        doppler, delay = (PS.L.PRESETS["mpg"] if kind == "mpg"
+        doppler, delay = (PS.PRESETS["mpg"] if kind == "mpg"
                           else (float(np.exp(rng.uniform(np.log(0.05), np.log(0.3)))), float(rng.uniform(0, 2))))
         snr0, drift = float(rng.uniform(-8, 0)), 0.0
+    elif SHORT:
+        u = rng.random()
+        kind = "awgn" if u < 0.4 else "mpg" if u < 0.7 else "random"
+        doppler, delay = (PS.L.PRESETS[kind] if kind != "random"
+                          else (float(np.exp(rng.uniform(np.log(0.01), np.log(0.1)))), float(rng.uniform(0, 2))))
+        snr0, drift = float(rng.uniform(0, 15)), float(rng.normal(0, 1.0))
     elif SEVERE:
         if rng.random() < 0.5:
             kind = str(rng.choice(sorted(HC.ITU_PRESETS)))
@@ -220,7 +240,7 @@ def session(seed):
         if kind == "random":
             doppler, delay = float(np.exp(rng.uniform(np.log(0.05), np.log(3.0)))), float(rng.uniform(0, 5))
         else:
-            doppler, delay = PS.L.PRESETS[kind]
+            doppler, delay = PS.PRESETS[kind]
         u = rng.random()
         snr0 = float(rng.uniform(10, 30) if HIGH else rng.uniform(-14, -8) if u < 0.005
                      else rng.uniform(22, 40) if u < 0.01 else rng.uniform(-8, 22))
@@ -231,14 +251,19 @@ def session(seed):
     if INTERFERENCE:
         irng = np.random.default_rng(np.random.SeedSequence([seed, 5]))
         intf = (INTF.draw(irng, INTERFERENCE), INTF.draw(irng, INTERFERENCE))
+    agc = None
+    if AGC_ON:
+        arng = np.random.default_rng(np.random.SeedSequence([seed, 6]))
+        agc = (AGC.draw(arng), AGC.draw(arng))
     ch = PS.ContinuousChannel(O.family(doppler), snr0, seed, horizon + 60, doppler=doppler, delay_ms=delay,
-                              interference=intf, wander_db=WANDER_DB)
+                              interference=intf, wander_db=WANDER_DB, agc=agc)
     pols = [Explorer(random.Random(seed * 2 + i)) for i in range(2)]
     out = []
     tag = dict(seed=seed, kind=kind, doppler=round(doppler, 3), delay_ms=round(delay, 2), snr=round(snr0, 2), cap=cap)
     phy = DataPhy(ch, tag, pols, snr0, drift, out)
+    workload = ("chat" if rng.random() < 0.5 else "winlink") if SHORT else "bulk"
     try:
-        L.run(pols[0], pols[1], None, L.WORKLOADS["bulk"](random.Random(seed + 7)), seed=seed, horizon=horizon,
+        L.run(pols[0], pols[1], None, L.WORKLOADS[workload](random.Random(seed + 7)), seed=seed, horizon=horizon,
               phy=phy, cap=cap)
     except AssertionError as e:  # a corrupt delivery would be a bug: keep the rows, say so
         print("session", seed, "assertion:", str(e)[:120], flush=True)
@@ -255,11 +280,13 @@ def main():
     ap.add_argument("--explore-faster", action="store_true", help="FASTLOW's exploration on any kind (EXPLORE_FASTER)")
     ap.add_argument("--floor", action="store_true", help="sustained SNR at the CPM floor, -19..-4 dB (FLOOR)")
     ap.add_argument("--severe", action="store_true", help="ITU severe profiles and 2-30 Hz Doppler (SEVERE)")
+    ap.add_argument("--short", action="store_true", help="flat/slow 0..15 dB, chat/winlink traffic (SHORT)")
     ap.add_argument("--high", action="store_true", help="high SNR on fading channels (HIGH)")
     ap.add_argument("--kinds", default="", help="comma-separated channel kinds only (KINDS_ONLY), e.g. awgn")
     ap.add_argument("--interference", nargs="?", const="v1", default=None, choices=sorted(INTF.DRAWS),
                     help="each station's interference drawn from interference.DRAWS[this] (default v1)")
     ap.add_argument("--wander", type=float, default=0.0, help="each station's floor wanders by this (dB)")
+    ap.add_argument("--agc", action="store_true", help="each station's receiver AGC drawn from data2g.agc.draw()")
     ap.add_argument("--out", required=True)
     ap.add_argument("--average-snr", action="store_true",
                     help="allow SNR against each burst's average power (without DATA2G_PEP_REF_DB)")
@@ -267,12 +294,14 @@ def main():
     if PS.PEP_REF_DB is None and not a.average_snr:
         ap.error("DATA2G_PEP_REF_DB is unset: set it (5: noise against each burst's peak, as data2g-host "
                  "transmits) or pass --average-snr")
-    global SLOW, HIGH, INTERFERENCE, WANDER_DB, KINDS_ONLY, FASTLOW, EXPLORE_FASTER, FLOOR, SEVERE
+
+    global SLOW, HIGH, INTERFERENCE, WANDER_DB, KINDS_ONLY, FASTLOW, EXPLORE_FASTER, FLOOR, SEVERE, SHORT, AGC_ON
+
     # set before the pool forks: the workers inherit them
     SLOW, HIGH, INTERFERENCE, WANDER_DB = a.slow, a.high, a.interference, a.wander
     KINDS_ONLY = tuple(filter(None, a.kinds.split(",")))
     FASTLOW, EXPLORE_FASTER, FLOOR = a.fastlow, a.explore_faster, a.floor
-    SEVERE = a.severe
+    SEVERE, SHORT, AGC_ON = a.severe, a.short, a.agc
     new = not os.path.exists(a.out) or os.path.getsize(a.out) == 0
     done = set() if new else {int(r["seed"]) for r in csv.DictReader(open(a.out))}
     todo = [s for s in range(a.first, a.first + a.sessions) if s not in done]

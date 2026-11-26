@@ -28,7 +28,7 @@ inline constexpr int DD_TAPS = 2;
 // refine's time pass keeps the Doppler prior's eigenpairs over this much of the window's least observation
 // variance (equalizer.DD_LOWRANK_TOL)
 inline constexpr double DD_LOWRANK_TOL = 1e-4;
-inline constexpr double DEFAULT_SPREAD_HZ = 2.0;
+inline constexpr double DEFAULT_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // per profile
 inline constexpr bool LOO_SPREAD = true;  // equalizer.filter_spread's, see equalizer.py
 inline constexpr int LOO_MIN_PILOTS = 8;
 inline constexpr double LOO_TOL = 0.1;
@@ -40,6 +40,8 @@ inline constexpr double SUPPORT_NOISE_Z = 3.09;  // delay_support's noise gate, 
 inline constexpr int SUPPORT_SLACK = 4;  // _support_basis's
 inline constexpr int PADDED_SLACK = 20;  // support_slack's padded order
 inline constexpr double PADDED_GAIN = 2.0;
+inline constexpr int SNR_SLACK = config::NCP;  // snr_noise's wider projection
+inline constexpr int SNR_MIN_DIMS = 3;  // the residual dimensions it needs
 inline constexpr double INF = std::numeric_limits<double>::infinity();
 
 // CARRIER0 + RS * (k0 + k) - FCENTER.
@@ -70,6 +72,9 @@ struct Smoothed {
     std::vector<double> keep;
 };
 Smoothed freq_smooth(const Mat<cd>& h_pilot, Support support, std::span<const double> bb, int slack = SUPPORT_SLACK);
+// snr_est's noise (equalizer.py snr_noise): n0, r are freq_smooth's for hs.
+double snr_noise(const Mat<cd>& h_pilot, const Mat<cd>& hs, double n0, int r, Support support,
+                 std::span<const double> bb);
 // The burst's projection order: SUPPORT_SLACK or PADDED_SLACK (equalizer.py).
 int support_slack(const Mat<cd>& h_pilot, Support support, std::span<const double> bb, double n0_pre = INF);
 
@@ -86,9 +91,18 @@ struct Estimate {
     Mat<cd> h;        // (n_f * 5, nc): frame f, data symbol s at row f * 5 + s
     Mat<double> mse;  // the same shape
     double n0 = 0, p_sig = 0, spread_hz = 0;
+    double n0_snr = 0;  // snr_est's noise (snr_noise; modem::snr_db)
     double filter_spread_hz = 0;  // the time filters' (refine's too); spread_hz is the reported one
     int slack = SUPPORT_SLACK;  // the support's padding (support_slack; refine's too)
+    // per carrier (nc), or per frame and carrier (n_f * nc: a per-window estimate, modem's
+    // config::EST_WINDOW); empty: n0. Read it with n0_at.
     std::vector<double> n0_k;
+    // The noise variance at data row `row` (frame row / DATA_SYMS_PER_FRAME), carrier k.
+    double n0_at(std::size_t row, std::size_t k) const {
+        if (n0_k.empty()) return n0;
+        if (n0_k.size() == static_cast<std::size_t>(nc)) return n0_k[k];
+        return n0_k[(row / config::DATA_SYMS_PER_FRAME) * static_cast<std::size_t>(nc) + k];
+    }
 };
 // n0_pre_k empty: None. Throws std::invalid_argument without a noise estimate.
 Estimate estimate(const Mat<cd>& h_pilot, Support support, std::span<const double> bb, double n0_pre = INF,

@@ -12,7 +12,7 @@ def substitutions(native):
 
     py = {k: getattr(cpm, k) for k in ("header_symbols", "layout", "burst_seconds", "modulate", "detect",
                                        "read_header", "soft", "find", "late_lock", "find_mid", "measure", "refine",
-                                       "prime_lock")}
+                                       "prime_lock", "CoarseTrack")}
 
     def own_grid(g):
         return cpm.GRIDS.get(g.name) == g and modem.PROTOCOL_VERSION == config.PROTOCOL_VERSION
@@ -39,10 +39,13 @@ def substitutions(native):
             return py["modulate"](spec, coded, dup, cap)
         return n.bandpass(spec.grid, n.modulate(spec.name, list(coded), dup, cap), cap)
 
-    def detect(g, x, reach_hz=150.0, fine=True, front_only=False, n_sym=0, floor=-1.0, mid=False):
+    def CoarseTrack(g, reach_hz=150.0):  # a compiled-in grid's: native, for native detect to read
+        return n.CoarseTrack(g.name, reach_hz) if own_grid(g) else py["CoarseTrack"](g, reach_hz)
+
+    def detect(g, x, reach_hz=150.0, fine=True, front_only=False, n_sym=0, floor=-1.0, mid=False, track=None, x0=0):
         if not own_grid(g):
-            return py["detect"](g, x, reach_hz, fine, front_only, n_sym, floor, mid)
-        return n.detect(g.name, x, reach_hz, fine, front_only, n_sym, floor, mid)
+            return py["detect"](g, x, reach_hz, fine, front_only, n_sym, floor, mid, track, x0)
+        return n.detect(g.name, x, reach_hz, fine, front_only, n_sym, floor, mid, track, x0)
 
     def read_header(g, x, s0, cfo, copies=cpm.HDR_COPIES):
         if not own_grid(g):
@@ -68,20 +71,20 @@ def substitutions(native):
             d["spec"] = cpm.SPECS[d["spec"]]
         return {**d, "band": g.name, "family": "cpm"}
 
-    def find(g, x, threshold=None, reach_hz=150.0, front_only=True, lo=0, hi=None, wait=False):
+    def find(g, x, threshold=None, reach_hz=150.0, front_only=True, lo=0, hi=None, wait=False, track=None, x0=0):
         if not own_grid(g):
-            return py["find"](g, x, threshold, reach_hz, front_only, lo, hi, wait)
-        return lock(g, n.find(g.name, x, threshold, reach_hz, front_only, lo, hi, wait))
+            return py["find"](g, x, threshold, reach_hz, front_only, lo, hi, wait, track, x0)
+        return lock(g, n.find(g.name, x, threshold, reach_hz, front_only, lo, hi, wait, track, x0))
 
     def late_lock(g, x, cand):
         if not own_grid(g):
             return py["late_lock"](g, x, cand)
         return lock(g, n.late_lock(g.name, x, cand["start"], cand["cfo"], cand["score"], cand["header_end"]))
 
-    def find_mid(g, x, lo=0, hi=None):
+    def find_mid(g, x, lo=0, hi=None, track=None, x0=0):
         if not own_grid(g):
-            return py["find_mid"](g, x, lo, hi)
-        return lock(g, n.find_mid(g.name, x, lo, hi))
+            return py["find_mid"](g, x, lo, hi, track, x0)
+        return lock(g, n.find_mid(g.name, x, lo, hi, track, x0))
 
     def prime_lock(g, x, lo, hi, cfo):
         if not own_grid(g):
@@ -136,6 +139,7 @@ def substitutions(native):
         (cpm, "_energies"): by_grid(n.energies, cpm._energies),
         (cpm, "_shares"): n.shares,
         (cpm, "detect"): detect,
+        (cpm, "CoarseTrack"): CoarseTrack,
         (cpm, "llrs"): by_grid(n.llrs, cpm.llrs),
         (cpm, "symbol_ll"): by_grid(n.symbol_ll, cpm.symbol_ll),
         (cpm, "read_header"): read_header,

@@ -11,6 +11,7 @@ from data2g import hfchannel as H
 from data2g.arq import engine as E
 from data2g.arq import session as S
 from data2g.config import FS
+from test_cwid import _cw_id_peak
 from test_engine import link
 
 
@@ -35,6 +36,35 @@ def test_sense_matches(native, snr, fading):
         a, b = py.feed(y[i:i + 80]), cc.feed(y[i:i + 80])
         assert a == b and py.hits_from == cc.hits_from, i
     assert py.hits_from > 0 or snr is not None  # (a weak or faded one may never go active)
+
+
+@pytest.mark.parametrize("freq,inr", [(1500.0, 8), (1500.0, 12), (1573.4, 10), (1573.4, 12), (1530.0, 6)])
+def test_sense_matches_under_a_steady_carrier(native, freq, inr):
+    """Window by window under a weak steady carrier (CwSense.QUIET_MAX): the
+    quiet-median rule decides here, where it never does on a clean ID."""
+    n = 20 * FS
+    a = np.sqrt(2 * 50 / (FS / 2) * 10 ** (inr / 10))
+    y = np.random.default_rng(9).normal(size=n) + a * np.sin(2 * np.pi * freq * np.arange(n) / FS)
+    py, cc = cwid.CwSense(), native.cwid.CwSense()
+    on = 0
+    for i in range(0, len(y), 80):
+        a_, b_ = py.feed(y[i:i + 80]), cc.feed(y[i:i + 80])
+        assert a_ == b_ and py.hits_from == cc.hits_from, i
+        on += a_
+    assert on < 0.03 * len(y) / 80
+
+
+@pytest.mark.parametrize("preset,inr", [("mpp", 10), ("mpp", 14), ("mpd", 10), ("mpd", 18)])
+def test_sense_matches_under_a_fading_carrier(native, preset, inr):
+    """Window by window under a fading steady carrier, where the detector
+    is at its margin (tests/test_cwid.py)."""
+    n = 20 * FS
+    f = H.fading(np.sin(2 * np.pi * 1573.4 * np.arange(n) / FS), preset, seed=11)
+    a = np.sqrt(2 * 50 / (FS / 2) * 10 ** (inr / 10)) / np.sqrt(2 * np.mean(f ** 2))
+    y = np.random.default_rng(12).normal(size=n) + a * f
+    py, cc = cwid.CwSense(), native.cwid.CwSense()
+    for i in range(0, len(y), 80):
+        assert py.feed(y[i:i + 80]) == cc.feed(y[i:i + 80]) and py.hits_from == cc.hits_from, i
 
 
 def _cw_tx(path):
@@ -66,3 +96,8 @@ def test_cw_ids_between_cpp_and_python_engines(native, reference, cpp_calls, tmp
     assert bytes(got_b) == up and bytes(got_a) == down
     assert a.session.station.stats.get("timeouts", 0) == 0
     assert _cw_tx(tmp_path / "cpp") and _cw_tx(tmp_path / "py")
+
+
+def test_cw_id_level_matches(native, reference):
+    assert _cw_id_peak(native.engine.Engine("W1AW", seed=1)) == pytest.approx(
+        _cw_id_peak(reference(E, "Engine")("W1AW", seed=1)), rel=1e-9)

@@ -40,6 +40,11 @@ constexpr bool TSAN = true;
 #else
 constexpr bool TSAN = false;
 #endif
+// worker_latency's absolute "on time" bound (0.15 s) holds only where the engine's steps take a small share of real
+// time (measured by the test's own unpaced run). The worker's lateness ran at about ten mean steps on both an M1
+// (3% load, 0.027 s late) and a Raspberry Pi 3B+ (44%, 0.463 s), i.e. about `load` seconds; 10% keeps the bound
+// with a 1.5x margin, and above it the bound is skipped.
+constexpr double MAX_LOAD_FOR_WORKER_BOUND = 0.10;
 
 // Both engines step, each hearing the other's last block plus noise, until
 // until() or `seconds` pass; paced: at real time.
@@ -427,22 +432,34 @@ void worker_latency() {
     check::current_step = "worker: header latency";
     const auto y = two_bursts();
     Engine ref("W1AW");
+    const auto ref_t0 = clk::now();
     const int j = second_header(ref, y, false).first;
+    const double ref_s = std::chrono::duration<double>(clk::now() - ref_t0).count();
     check::is_true(j > 0, "two headers heard");
+    // This machine's speed: the unpaced reference run's share of the audio's real time (the same steps, no decode
+    // in flight). The worker's absolute bound below assumes a step takes a small part of a block.
+    const double load = ref_s / (0.1 * (j + 1));
     EngineConfig cs, cw;
     cw.worker = true;
     SlowEngine sync_e("W1AW", cs), worker_e("W1AW", cw);
     const auto [js, late_sync] = second_header(sync_e, y, true, j);
     const auto [jw, late_worker] = second_header(worker_e, y, true, j);
-    std::printf("second header, 1.5 s decode in flight: %.3f s late in sync mode, %.3f s with the worker\n", late_sync,
-                late_worker);
+    std::printf("second header, 1.5 s decode in flight: %.3f s late in sync mode, %.3f s with the worker "
+                "(engine at %.0f%% of real time here)\n", late_sync, late_worker, 100 * load);
     check::equal(js, j, "sync: same block");
     check::equal(jw, j, "worker: same block");
     check::is_true(late_worker < late_sync, "the worker hears it sooner");
     // Absolute wall-clock bounds: not on shared CI runners (macOS under
     // Rosetta missed 0.15 s); the relative check above runs everywhere.
     if (!TSAN && !std::getenv("CI")) {
-        check::is_true(late_worker < 0.15, "worker: on time");
+        // On a host where the engine itself needs a large share of real time (a Raspberry Pi 3B+ runs it about 17x
+        // slower than an M1, and was 0.46 s late), a step can't return within the bound with or without the
+        // worker: skipped there, and said so. The decode still holds the sync engine back everywhere.
+        if (load <= MAX_LOAD_FOR_WORKER_BOUND)
+            check::is_true(late_worker < 0.15, "worker: on time");
+        else
+            std::printf("worker: on time not checked: the engine needs %.0f%% of real time here (bound assumes <= %.0f%%)\n",
+                        100 * load, 100 * MAX_LOAD_FOR_WORKER_BOUND);
         check::is_true(late_sync > 0.15, "sync: held by the decode");
     }
 }
